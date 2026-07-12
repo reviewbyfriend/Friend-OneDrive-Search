@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="th"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>จัดการ Friend Portal</title>
+<style>
+body{font-family:system-ui;background:#f5f7fb;margin:0;color:#202124}.wrap{max-width:1100px;margin:auto;padding:20px}
+.card{background:white;border:1px solid #e3e6ee;border-radius:16px;padding:16px;margin:12px 0;overflow:auto}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}
+input,select,button{padding:10px;border-radius:10px;border:1px solid #bbb;box-sizing:border-box}
+button,.btn{background:#1769e0;color:white;border:0;font-weight:700;text-decoration:none;padding:10px 14px;border-radius:10px;display:inline-block}
+.secondary{background:#e9eef8;color:#174a91}.danger{background:#8c1d1d}.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+table{width:100%;border-collapse:collapse;font-size:14px}th,td{padding:9px;border-bottom:1px solid #eee;text-align:left;vertical-align:top}
+code{background:#f1f3f4;padding:2px 5px;border-radius:5px}.ok{background:#e8f7e8;padding:10px;border-radius:10px}
+.warn{background:#fff5d8;padding:10px;border-radius:10px}.secret{font-size:28px;font-weight:800;letter-spacing:4px}
+</style></head><body><div class="wrap">
+<div class="row"><h1 style="flex:1">🗂️ Friend Secure Portal</h1><form method="post" action="/logout"><button class="danger">ออกจากระบบ</button></form></div>
+{% if request.query_params.get("message") %}<div class="ok">{{ request.query_params.get("message") }}</div>{% endif %}
+{% if request.query_params.get("created") and request.session.get("last_created_code") %}
+<div class="card warn"><b>รหัสใหม่ — แสดงครั้งเดียว</b><div class="secret">{{ request.session.get("last_created_code") }}</div>
+<p>คัดลอกรหัสนี้ส่งให้ผู้รับ แล้วเก็บหน้าจอนี้ไว้ก่อนรีเฟรช</p></div>{% endif %}
+
+<div class="card"><h2>OneDrive และดัชนีค้นหา</h2>
+<div class="row">
+{% if not connected %}<a class="btn" href="/login/microsoft">เชื่อม OneDrive</a>
+{% else %}
+<form method="post" action="/admin/sync"><button>ซิงก์ไฟล์ที่เปลี่ยน</button></form>
+<form method="post" action="/admin/rescan"><button class="secondary">สแกนใหม่ทั้งหมด</button></form>
+{% endif %}
+</div>
+<p>ไฟล์ทั้งหมด {{ stats.total }} · ค้นได้ {{ stats.indexed }} · ผิดพลาด {{ stats.errors }}</p></div>
+
+<div class="card"><h2>สร้างรหัสชั่วคราว</h2>
+<form method="post" action="/admin/codes">
+<div class="grid">
+<label>ชื่อผู้รับ/วัตถุประสงค์<input name="label" required placeholder="เช่น ส่งให้คุณเอ"></label>
+<label>ระยะเวลา<input name="duration_value" type="number" min="1" value="1" required></label>
+<label>หน่วย<select name="duration_unit"><option value="hours">ชั่วโมง</option><option value="days">วัน</option></select></label>
+<label>ขอบเขต<select name="scope_type">
+<option value="all">ไฟล์ทั้งหมดในดัชนี</option><option value="folder">เฉพาะโฟลเดอร์</option><option value="file">เฉพาะไฟล์เดียว</option>
+</select></label>
+<label>Path โฟลเดอร์ หรือ Item ID<input name="scope_value" placeholder="/แบบฟอร์มกลาง หรือ item id"></label>
+<label>จำนวนดาวน์โหลดสูงสุด<input name="max_downloads" type="number" min="1" placeholder="เว้นว่าง = ไม่จำกัด"></label>
+</div>
+<div class="row" style="margin-top:10px">
+<label><input type="checkbox" name="can_search" checked> ค้นหาได้</label>
+<label><input type="checkbox" name="can_download" checked> ดาวน์โหลดได้</label>
+<button>สร้างรหัส 6 หลัก</button></div></form>
+<p><small>แนะนำให้เลือกเฉพาะโฟลเดอร์หรือไฟล์ ไม่ควรเปิดไฟล์ทั้งหมดเมื่อส่งให้บุคคลภายนอก</small></p></div>
+
+<div class="card"><h2>รหัสที่สร้างไว้</h2><table><tr><th>ชื่อ</th><th>ขอบเขต</th><th>หมดอายุ</th><th>ดาวน์โหลด</th><th>สถานะ</th><th></th></tr>
+{% for c in codes %}<tr>
+<td>{{ c.label }}<br><small>ลงท้าย **{{ c.code_hint }}</small></td>
+<td>{{ c.scope_type }}<br><small>{{ c.scope_value or "ทั้งหมด" }}</small></td>
+<td>{{ c.expires_at }}</td>
+<td>{{ c.download_count }}{% if c.max_downloads is not none %}/{{ c.max_downloads }}{% endif %}</td>
+<td>{% if c.is_active %}เปิด{% else %}ปิด{% endif %}</td>
+<td><form method="post" action="/admin/codes/{{ c.id }}/toggle"><button class="secondary">{% if c.is_active %}ปิดรหัส{% else %}เปิดรหัส{% endif %}</button></form></td>
+</tr>{% endfor %}</table></div>
+
+<div class="card"><h2>ไฟล์ในดัชนี (300 รายการแรก)</h2><table><tr><th>ชื่อ</th><th>Path</th><th>Item ID</th><th>สถานะ</th></tr>
+{% for f in files %}<tr><td>{{ f.name }}</td><td>{{ f.path }}</td><td><code>{{ f.item_id }}</code></td><td>{{ f.status }}</td></tr>{% endfor %}</table></div>
+
+<div class="card"><h2>ประวัติการใช้งาน</h2><table><tr><th>เวลา</th><th>ผู้รับ</th><th>เหตุการณ์</th><th>รายละเอียด</th><th>IP</th></tr>
+{% for l in logs %}<tr><td>{{ l.created_at }}</td><td>{{ l.label or "-" }}</td><td>{{ l.event_type }}</td><td>{{ l.file_name or "-" }}</td><td>{{ l.ip_address or "-" }}</td></tr>{% endfor %}</table></div>
+</div></body></html>

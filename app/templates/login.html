@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="th"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Friend File Portal</title>
+<style>
+body{font-family:system-ui;background:#f4f6fb;margin:0;color:#202124}.wrap{max-width:520px;margin:40px auto;padding:16px}
+.card{background:white;border:1px solid #e3e6ee;border-radius:18px;padding:20px;margin:14px 0;box-shadow:0 4px 16px #0000000d}
+h1{margin:0 0 8px}.sub{color:#666}.tabs{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+input,button{width:100%;box-sizing:border-box;padding:13px;margin:7px 0;border-radius:12px;border:1px solid #bbb;font-size:16px}
+button{background:#1769e0;color:white;border:0;font-weight:700}.error{background:#ffecec;color:#8c1d1d;padding:12px;border-radius:10px}
+small{color:#777}
+</style></head><body><div class="wrap">
+<h1>🔐 Friend File Portal</h1><div class="sub">ค้นหาและดาวน์โหลดไฟล์จากพื้นที่ที่ได้รับอนุญาต</div>
+{% if error %}<div class="error">{{ error }}</div>{% endif %}
+<div class="card"><h2>ผู้รับไฟล์</h2>
+<form method="post" action="/access/login">
+<label>รหัสชั่วคราว</label><input name="code" inputmode="numeric" autocomplete="one-time-code" placeholder="เช่น 482913" required>
+<button>เข้าใช้งาน</button></form><small>รหัสจะหยุดใช้เมื่อหมดเวลา หรือเมื่อเจ้าของปิดรหัส</small></div>
+<div class="card"><h2>เจ้าของระบบ</h2>
+<form method="post" action="/owner/login">
+<input name="username" placeholder="ชื่อผู้ใช้" required>
+<input name="password" type="password" placeholder="รหัสผ่าน" required>
+<button>เข้าสู่หน้าจัดการ</button></form></div>
+</div></body></html>

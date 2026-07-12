@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="th"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ค้นหาไฟล์</title>
+<style>
+body{font-family:system-ui;background:#f5f7fb;margin:0;color:#202124}.wrap{max-width:900px;margin:auto;padding:20px}
+.card{background:white;border:1px solid #e3e6ee;border-radius:16px;padding:16px;margin:12px 0}
+.search{display:flex;gap:8px}input{flex:1;padding:13px;border:1px solid #bbb;border-radius:11px;font-size:17px}
+button,.btn{padding:11px 14px;border:0;border-radius:10px;background:#1769e0;color:white;font-weight:700;text-decoration:none;display:inline-block}
+.secondary{background:#e9eef8;color:#174a91}.path{color:#666;font-size:13px;word-break:break-all}.snippet{line-height:1.6}mark{background:#fff2a8}
+.top{display:flex;gap:8px;align-items:center}.top h1{flex:1}.meta{color:#777;font-size:12px}
+@media(max-width:600px){.search{flex-direction:column}}
+</style></head><body><div class="wrap">
+<div class="top"><h1>🔎 ค้นหาไฟล์</h1><form method="post" action="/logout"><button class="secondary">ออก</button></form></div>
+<div class="card"><b>สิทธิ์: {{ code.label }}</b><div class="meta">หมดอายุ {{ code.expires_at }} · ดาวน์โหลดแล้ว {{ code.download_count }}{% if code.max_downloads is not none %}/{{ code.max_downloads }}{% endif %}</div></div>
+{% if code.can_search %}
+<div class="card"><form class="search" method="get" action="/portal"><input name="q" value="{{ q }}" placeholder="ชื่อไฟล์ เลขรับ เลขคดี หรือข้อความในเอกสาร" autofocus><button>ค้นหา</button></form></div>
+{% else %}<div class="card">รหัสนี้ไม่ได้รับสิทธิ์ค้นหา</div>{% endif %}
+{% if q %}<h2>ผลค้นหา “{{ q }}” — {{ results|length }} รายการ</h2>
+{% for r in results %}<div class="card"><h3>📄 {{ r.name }}</h3><div class="path">{{ r.path }}</div><p class="snippet">{{ r.snippet|safe }}</p>
+{% if code.can_download %}<a class="btn" href="/download/{{ r.item_id }}">ดาวน์โหลดไฟล์ต้นฉบับ</a>{% endif %}
+</div>{% else %}<div class="card">ไม่พบไฟล์ที่ตรงกับคำค้น</div>{% endfor %}{% endif %}
+</div></body></html>
