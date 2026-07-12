@@ -1,6 +1,10 @@
+import json
 import os
 from pathlib import Path
-import msal, requests
+from urllib.parse import urlparse
+
+import msal
+import requests
 
 GRAPH = "https://graph.microsoft.com/v1.0"
 DATA_DIR = Path(os.getenv("DATA_DIR", "./data"))
@@ -25,20 +29,25 @@ def _save_cache(cache):
 
 def build_app(cache=None):
     return msal.ConfidentialClientApplication(
-        CLIENT_ID, authority=AUTHORITY,
-        client_credential=CLIENT_SECRET, token_cache=cache
+        CLIENT_ID,
+        authority=AUTHORITY,
+        client_credential=CLIENT_SECRET,
+        token_cache=cache,
     )
 
-def get_auth_url(redirect_uri, state):
+def get_auth_url(redirect_uri: str, state: str):
     cache = _load_cache()
     app = build_app(cache)
     url = app.get_authorization_request_url(
-        SCOPES, redirect_uri=redirect_uri, state=state, prompt="select_account"
+        SCOPES,
+        redirect_uri=redirect_uri,
+        state=state,
+        prompt="select_account",
     )
     _save_cache(cache)
     return url
 
-def exchange_code(code, redirect_uri):
+def exchange_code(code: str, redirect_uri: str):
     cache = _load_cache()
     app = build_app(cache)
     result = app.acquire_token_by_authorization_code(
@@ -61,21 +70,19 @@ def logout_local():
     if CACHE_FILE.exists():
         CACHE_FILE.unlink()
 
-def graph_get(url, token):
+def graph_get(url: str, token: str):
     r = requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=90)
     r.raise_for_status()
     return r.json()
 
-def download_item(item_id, token):
-    r = requests.get(
-        f"{GRAPH}/me/drive/items/{item_id}/content",
-        headers={"Authorization": f"Bearer {token}"},
-        timeout=180
-    )
+def download_item(item_id: str, token: str) -> bytes:
+    # /content responds with a redirect; requests follows it by default.
+    url = f"{GRAPH}/me/drive/items/{item_id}/content"
+    r = requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=180)
     r.raise_for_status()
-    return r.content, r.headers.get("content-type", "application/octet-stream")
+    return r.content
 
-def iter_delta(token, delta_url=None):
+def iter_delta(token: str, delta_url: str | None = None):
     url = delta_url or (
         f"{GRAPH}/me/drive/root/delta"
         "?$select=id,name,size,lastModifiedDateTime,webUrl,file,folder,parentReference,deleted"
@@ -84,8 +91,9 @@ def iter_delta(token, delta_url=None):
         payload = graph_get(url, token)
         for item in payload.get("value", []):
             yield item
-        if payload.get("@odata.nextLink"):
-            url = payload["@odata.nextLink"]
-        else:
-            yield {"__delta_link__": payload.get("@odata.deltaLink")}
-            break
+        next_url = payload.get("@odata.nextLink")
+        if next_url:
+            url = next_url
+            continue
+        yield {"__delta_link__": payload.get("@odata.deltaLink")}
+        break

@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Friend OneDrive Search</title>
+  <style>
+    :root { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color:#202124; }
+    body { margin:0; background:#f6f7fb; }
+    .wrap { max-width:900px; margin:auto; padding:24px 16px 60px; }
+    h1 { margin:0 0 6px; font-size:28px; }
+    .sub { color:#666; margin-bottom:20px; }
+    .card { background:white; border:1px solid #e5e7eb; border-radius:16px; padding:16px; margin:12px 0; box-shadow:0 2px 10px rgba(0,0,0,.04); }
+    .search { display:flex; gap:8px; }
+    input { flex:1; min-width:0; font-size:18px; padding:14px; border:1px solid #bbb; border-radius:12px; }
+    button,.btn { border:0; border-radius:12px; padding:12px 16px; font-weight:700; cursor:pointer; text-decoration:none; display:inline-block; background:#1769e0; color:white; }
+    .secondary { background:#e8eef8; color:#174a91; }
+    .danger { background:#f5e8e8; color:#8b1d1d; }
+    .actions { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+    .stats { color:#555; font-size:14px; }
+    .result-title { font-weight:800; font-size:17px; word-break:break-word; }
+    .path { color:#666; font-size:13px; word-break:break-all; margin:5px 0 10px; }
+    .snippet { line-height:1.6; }
+    mark { background:#fff2a8; padding:1px 2px; }
+    .meta { color:#777; font-size:12px; margin-top:10px; }
+    .notice { background:#fff8dc; }
+    @media (max-width:600px) { .search { flex-direction:column; } button { width:100%; } }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🔎 Friend OneDrive Search</h1>
+  <div class="sub">ค้นจากชื่อไฟล์ โฟลเดอร์ และข้อความภายในเอกสาร โดยไม่แก้ไขไฟล์ต้นฉบับ</div>
+
+  {% if request.query_params.get("message") %}
+  <div class="card notice">{{ request.query_params.get("message") }}</div>
+  {% endif %}
+
+  {% if not connected %}
+  <div class="card">
+    <p><strong>ยังไม่ได้เชื่อม OneDrive</strong></p>
+    <a class="btn" href="/login">เชื่อมบัญชี Microsoft</a>
+  </div>
+  {% else %}
+  <div class="card">
+    <form class="search" method="get" action="/">
+      <input name="q" value="{{ q }}" placeholder="ชื่อจำเลย เลขรับ เลขคดี หรือข้อความในเอกสาร" autofocus>
+      <button type="submit">ค้นหา</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <div class="actions">
+      <form method="post" action="/sync"><button>ซิงก์ไฟล์ที่เปลี่ยน</button></form>
+      <form method="post" action="/reset-and-sync" onsubmit="return confirm('ระบบจะไล่อ่านไฟล์ทั้งหมดใหม่ ใช้เมื่อดัชนีมีปัญหาเท่านั้น')">
+        <button class="secondary">สแกนใหม่ทั้งหมด</button>
+      </form>
+      <form method="post" action="/logout"><button class="danger">ตัดการเชื่อมต่อ</button></form>
+    </div>
+    <p class="stats">
+      พบในฐานข้อมูล {{ stats.total }} ไฟล์ · ค้นได้ {{ stats.indexed }} · ผิดพลาด {{ stats.errors }}
+      {% if stats.last_indexed %}· อัปเดตล่าสุด {{ stats.last_indexed }}{% endif %}
+    </p>
+  </div>
+
+  {% if q %}
+    <h2>ผลค้นหา “{{ q }}” — {{ results|length }} รายการ</h2>
+    {% for r in results %}
+      <div class="card">
+        <div class="result-title">📄 {{ r.name }}</div>
+        <div class="path">{{ r.path }}</div>
+        <div class="snippet">{{ r.snippet|safe }}</div>
+        <div class="meta">แก้ไขล่าสุด {{ r.modified_at or "-" }} · {{ r.extension }}</div>
+        {% if r.web_url %}<p><a class="btn secondary" target="_blank" rel="noopener" href="{{ r.web_url }}">เปิดใน OneDrive</a></p>{% endif %}
+      </div>
+    {% else %}
+      <div class="card">ยังไม่พบคำนี้ในไฟล์ที่ทำดัชนีไว้</div>
+    {% endfor %}
+  {% endif %}
+  {% endif %}
+</div>
+</body>
+</html>
