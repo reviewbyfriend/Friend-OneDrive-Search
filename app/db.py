@@ -1,9 +1,15 @@
+
 import os
 import sqlite3
 from pathlib import Path
 
-DATA_DIR = Path(os.getenv("DATA_DIR", "./data"))
-DATA_DIR.mkdir(parents=True, exist_ok=True)
+DATA_DIR = Path(os.getenv("DATA_DIR", "/data"))
+try:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+except Exception:
+    DATA_DIR = Path("./data")
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+
 DB_PATH = DATA_DIR / "search.db"
 
 def connect():
@@ -25,7 +31,7 @@ def init_db():
             size INTEGER DEFAULT 0,
             content TEXT DEFAULT '',
             indexed_at TEXT DEFAULT CURRENT_TIMESTAMP,
-            status TEXT DEFAULT 'indexed',
+            status TEXT DEFAULT 'metadata_only',
             error TEXT
         );
 
@@ -43,19 +49,19 @@ def init_db():
         );
         """)
 
-def get_state(key: str):
+def get_state(key):
     with connect() as conn:
         row = conn.execute("SELECT value FROM app_state WHERE key=?", (key,)).fetchone()
         return row["value"] if row else None
 
-def set_state(key: str, value: str):
+def set_state(key, value):
     with connect() as conn:
         conn.execute("""
-            INSERT INTO app_state(key, value) VALUES(?, ?)
-            ON CONFLICT(key) DO UPDATE SET value=excluded.value
+        INSERT INTO app_state(key,value) VALUES(?,?)
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value
         """, (key, value))
 
-def upsert_file(meta: dict, content: str, status="indexed", error=None):
+def upsert_file(meta, content="", status="metadata_only", error=None):
     with connect() as conn:
         conn.execute("""
         INSERT INTO files(item_id,name,path,web_url,mime_type,extension,modified_at,size,content,indexed_at,status,error)
@@ -74,31 +80,29 @@ def upsert_file(meta: dict, content: str, status="indexed", error=None):
           error=excluded.error
         """, {**meta, "content": content, "status": status, "error": error})
         conn.execute("DELETE FROM files_fts WHERE item_id=?", (meta["item_id"],))
-        if status == "indexed":
-            conn.execute(
-                "INSERT INTO files_fts(item_id,name,path,content) VALUES(?,?,?,?)",
-                (meta["item_id"], meta["name"], meta.get("path") or "", content)
-            )
+        conn.execute("""
+        INSERT INTO files_fts(item_id,name,path,content)
+        VALUES(?,?,?,?)
+        """, (meta["item_id"], meta["name"], meta.get("path") or "", content or ""))
 
-def delete_file(item_id: str):
+def delete_file(item_id):
     with connect() as conn:
         conn.execute("DELETE FROM files WHERE item_id=?", (item_id,))
         conn.execute("DELETE FROM files_fts WHERE item_id=?", (item_id,))
 
-def search_files(query: str, limit=50):
-    query = query.strip()
+def search_files(query, limit=100):
+    query = (query or "").strip()
     if not query:
         return []
-    # Quote each term to avoid malformed FTS syntax from legal case numbers/slashes.
-    terms = [t.replace('"', '""') for t in query.split() if t]
-    fts_query = " AND ".join(f'"{t}"' for t in terms)
+    terms = [x.replace('"', '""') for x in query.split() if x]
+    fts_query = " AND ".join(f'"{x}"' for x in terms)
     with connect() as conn:
         rows = conn.execute("""
         SELECT f.*,
-               snippet(files_fts, 3, '<mark>', '</mark>', ' … ', 28) AS snippet,
-               bm25(files_fts, 2.0, 1.0, 1.0) AS score
+               snippet(files_fts, 3, '<mark>', '</mark>', ' … ', 32) AS snippet,
+               bm25(files_fts, 3.0, 2.0, 1.0) AS score
         FROM files_fts
-        JOIN files f ON f.item_id = files_fts.item_id
+        JOIN files f ON f.item_id=files_fts.item_id
         WHERE files_fts MATCH ?
         ORDER BY score, f.modified_at DESC
         LIMIT ?
@@ -108,7 +112,23 @@ def search_files(query: str, limit=50):
 def stats():
     with connect() as conn:
         total = conn.execute("SELECT COUNT(*) c FROM files").fetchone()["c"]
-        indexed = conn.execute("SELECT COUNT(*) c FROM files WHERE status='indexed'").fetchone()["c"]
+        content = conn.execute("SELECT COUNT(*) c FROM files WHERE status='content_indexed'").fetchone()["c"]
+        metadata = conn.execute("SELECT COUNT(*) c FROM files WHERE status='metadata_only'").fetchone()["c"]
         errors = conn.execute("SELECT COUNT(*) c FROM files WHERE status='error'").fetchone()["c"]
         last = conn.execute("SELECT MAX(indexed_at) x FROM files").fetchone()["x"]
-        return {"total": total, "indexed": indexed, "errors": errors, "last_indexed": last}
+        return {
+            "total": total,
+            "content_indexed": content,
+            "metadata_only": metadata,
+            "errors": errors,
+            "last_indexed": last
+        }
+
+
+def sync_state():
+    return {
+        "last_started": get_state("last_sync_started"),
+        "last_completed": get_state("last_sync_completed"),
+        "last_result": get_state("last_sync_result"),
+        "sync_running": get_state("sync_running") == "1"
+    }

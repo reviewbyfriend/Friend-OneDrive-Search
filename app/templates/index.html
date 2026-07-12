@@ -1,83 +1,127 @@
+
 <!doctype html>
 <html lang="th">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Friend OneDrive Search</title>
-  <style>
-    :root { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color:#202124; }
-    body { margin:0; background:#f6f7fb; }
-    .wrap { max-width:900px; margin:auto; padding:24px 16px 60px; }
-    h1 { margin:0 0 6px; font-size:28px; }
-    .sub { color:#666; margin-bottom:20px; }
-    .card { background:white; border:1px solid #e5e7eb; border-radius:16px; padding:16px; margin:12px 0; box-shadow:0 2px 10px rgba(0,0,0,.04); }
-    .search { display:flex; gap:8px; }
-    input { flex:1; min-width:0; font-size:18px; padding:14px; border:1px solid #bbb; border-radius:12px; }
-    button,.btn { border:0; border-radius:12px; padding:12px 16px; font-weight:700; cursor:pointer; text-decoration:none; display:inline-block; background:#1769e0; color:white; }
-    .secondary { background:#e8eef8; color:#174a91; }
-    .danger { background:#f5e8e8; color:#8b1d1d; }
-    .actions { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
-    .stats { color:#555; font-size:14px; }
-    .result-title { font-weight:800; font-size:17px; word-break:break-word; }
-    .path { color:#666; font-size:13px; word-break:break-all; margin:5px 0 10px; }
-    .snippet { line-height:1.6; }
-    mark { background:#fff2a8; padding:1px 2px; }
-    .meta { color:#777; font-size:12px; margin-top:10px; }
-    .notice { background:#fff8dc; }
-    @media (max-width:600px) { .search { flex-direction:column; } button { width:100%; } }
-  </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Friend OneDrive Search</title>
+<style>
+body{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;background:#f5f7fb;margin:0;color:#202124}
+.wrap{max-width:900px;margin:auto;padding:24px 16px 60px}
+.card{background:white;border:1px solid #e3e6ee;border-radius:16px;padding:16px;margin:12px 0;box-shadow:0 3px 14px rgba(0,0,0,.04)}
+h1{margin-bottom:5px}.sub{color:#666}
+.search{display:flex;gap:8px}.search input{flex:1;font-size:17px;padding:13px;border:1px solid #bbb;border-radius:11px}
+button,.btn{background:#1769e0;color:white;border:0;border-radius:11px;padding:11px 15px;font-weight:700;text-decoration:none;display:inline-block;cursor:pointer}
+.secondary{background:#e8eef8;color:#174a91}.actions{display:flex;gap:8px;flex-wrap:wrap}
+.notice{background:#fff7d8}.error{background:#ffe9e9;color:#8b1d1d}.success{background:#eaf8ed}
+.path{font-size:13px;color:#666;word-break:break-all}.snippet{line-height:1.6}mark{background:#fff1a8}.meta{font-size:12px;color:#777}
+.badge{display:inline-block;padding:4px 8px;border-radius:999px;font-size:12px;background:#eef1f5;margin:4px 4px 4px 0}
+.status-dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:#2d9d50;margin-right:6px}
+.status-dot.running{background:#e39b20}
+@media(max-width:600px){.search{flex-direction:column}}
+</style>
 </head>
-<body>
-<div class="wrap">
-  <h1>🔎 Friend OneDrive Search</h1>
-  <div class="sub">ค้นจากชื่อไฟล์ โฟลเดอร์ และข้อความภายในเอกสาร โดยไม่แก้ไขไฟล์ต้นฉบับ</div>
+<body><div class="wrap">
+<h1>🔎 Friend OneDrive Search</h1>
+<div class="sub">เชื่อมครั้งเดียว แล้วตรวจไฟล์ใหม่และไฟล์แก้ไขให้อัตโนมัติ</div>
 
-  {% if request.query_params.get("message") %}
-  <div class="card notice">{{ request.query_params.get("message") }}</div>
-  {% endif %}
+{% if request.query_params.get("error") == "missing_config" %}
+<div class="card error">ยังไม่ได้ตั้งค่า Microsoft ใน Railway Variables</div>
+{% endif %}
 
-  {% if not connected %}
-  <div class="card">
-    <p><strong>ยังไม่ได้เชื่อม OneDrive</strong></p>
-    <a class="btn" href="/login">เชื่อมบัญชี Microsoft</a>
-  </div>
-  {% else %}
-  <div class="card">
-    <form class="search" method="get" action="/">
-      <input name="q" value="{{ q }}" placeholder="ชื่อจำเลย เลขรับ เลขคดี หรือข้อความในเอกสาร" autofocus>
-      <button type="submit">ค้นหา</button>
-    </form>
-  </div>
+{% if request.query_params.get("message") == "connected" %}
+<div class="card success">เชื่อม OneDrive สำเร็จแล้ว ระบบเริ่มทำดัชนีให้อัตโนมัติ</div>
+{% elif request.query_params.get("message") == "sync_started" %}
+<div class="card notice">เริ่มตรวจไฟล์ที่เปลี่ยนแล้ว สามารถค้นหาต่อได้ระหว่างระบบทำงาน</div>
+{% elif request.query_params.get("message") == "rescan_started" %}
+<div class="card notice">เริ่มสแกนใหม่ทั้งหมดแล้ว</div>
+{% endif %}
 
-  <div class="card">
-    <div class="actions">
-      <form method="post" action="/sync"><button>ซิงก์ไฟล์ที่เปลี่ยน</button></form>
-      <form method="post" action="/reset-and-sync" onsubmit="return confirm('ระบบจะไล่อ่านไฟล์ทั้งหมดใหม่ ใช้เมื่อดัชนีมีปัญหาเท่านั้น')">
-        <button class="secondary">สแกนใหม่ทั้งหมด</button>
-      </form>
-      <form method="post" action="/logout"><button class="danger">ตัดการเชื่อมต่อ</button></form>
-    </div>
-    <p class="stats">
-      พบในฐานข้อมูล {{ stats.total }} ไฟล์ · ค้นได้ {{ stats.indexed }} · ผิดพลาด {{ stats.errors }}
-      {% if stats.last_indexed %}· อัปเดตล่าสุด {{ stats.last_indexed }}{% endif %}
-    </p>
-  </div>
-
-  {% if q %}
-    <h2>ผลค้นหา “{{ q }}” — {{ results|length }} รายการ</h2>
-    {% for r in results %}
-      <div class="card">
-        <div class="result-title">📄 {{ r.name }}</div>
-        <div class="path">{{ r.path }}</div>
-        <div class="snippet">{{ r.snippet|safe }}</div>
-        <div class="meta">แก้ไขล่าสุด {{ r.modified_at or "-" }} · {{ r.extension }}</div>
-        {% if r.web_url %}<p><a class="btn secondary" target="_blank" rel="noopener" href="{{ r.web_url }}">เปิดใน OneDrive</a></p>{% endif %}
-      </div>
-    {% else %}
-      <div class="card">ยังไม่พบคำนี้ในไฟล์ที่ทำดัชนีไว้</div>
-    {% endfor %}
-  {% endif %}
-  {% endif %}
+<div class="card">
+{% if not ms_configured %}
+<b>เว็บเปิดได้แล้ว แต่ยังไม่ได้ตั้งค่า Microsoft</b>
+{% elif not connected %}
+<b>พร้อมเชื่อม OneDrive</b>
+<p><a class="btn" href="/login">เชื่อมบัญชี Microsoft</a></p>
+{% else %}
+<p>
+{% if sync.sync_running %}
+<span class="status-dot running"></span><b id="sync-label">กำลังตรวจไฟล์ใน OneDrive…</b>
+{% else %}
+<span class="status-dot"></span><b id="sync-label">เชื่อม OneDrive แล้ว</b>
+{% endif %}
+</p>
+<p class="meta">
+ระบบตรวจอัตโนมัติทุก {{ auto_sync_minutes }} นาที ·
+อัปเดตเสร็จล่าสุด <span id="last-completed">{{ sync.last_completed or "ยังไม่เคย" }}</span>
+</p>
+<div class="actions">
+<form method="post" action="/sync"><button>ตรวจไฟล์ตอนนี้</button></form>
+<form method="post" action="/rescan"><button class="secondary">สแกนใหม่ทั้งหมด</button></form>
 </div>
+<p class="meta" id="stats">
+ไฟล์ทั้งหมด {{ stats.total }} ·
+ค้นเนื้อหาได้ {{ stats.content_indexed }} ·
+ค้นชื่อ/โฟลเดอร์ได้ {{ stats.metadata_only }} ·
+ผิดพลาด {{ stats.errors }}
+</p>
+{% endif %}
+</div>
+
+<div class="card">
+<form class="search" method="get" action="/">
+<input name="q" value="{{ q }}" placeholder="ชื่อไฟล์ ชื่อจำเลย เลขรับ เลขคดี หรือคำในเอกสาร">
+<button>ค้นหา</button>
+</form>
+</div>
+
+{% if q %}
+<h2>ผลค้นหา “{{ q }}” — {{ results|length }} รายการ</h2>
+{% for r in results %}
+<div class="card">
+<h3>📄 {{ r.name }}</h3>
+<div class="path">{{ r.path }}</div>
+{% if r.status == "content_indexed" %}
+<span class="badge">ค้นในเนื้อหาได้</span>
+{% elif r.status == "metadata_only" %}
+<span class="badge">ค้นได้จากชื่อไฟล์/โฟลเดอร์</span>
+{% else %}
+<span class="badge">อ่านเนื้อหาไม่สำเร็จ</span>
+{% endif %}
+{% if r.snippet %}<p class="snippet">{{ r.snippet|safe }}</p>{% endif %}
+<div class="meta">แก้ไขล่าสุด {{ r.modified_at or "-" }} · {{ r.extension or "ไม่มีนามสกุล" }}</div>
+{% if r.web_url %}
+<p><a class="btn secondary" target="_blank" rel="noopener" href="{{ r.web_url }}">เปิดไฟล์ใน OneDrive</a></p>
+{% endif %}
+</div>
+{% else %}
+<div class="card">ยังไม่พบคำนี้</div>
+{% endfor %}
+{% endif %}
+</div>
+
+{% if connected %}
+<script>
+async function refreshStatus(){
+  try{
+    const res = await fetch('/sync-status', {cache:'no-store'});
+    const data = await res.json();
+    const label = document.getElementById('sync-label');
+    const last = document.getElementById('last-completed');
+    const stats = document.getElementById('stats');
+    if(data.sync.sync_running){
+      label.textContent = 'กำลังตรวจไฟล์ใน OneDrive…';
+    }else{
+      label.textContent = 'เชื่อม OneDrive แล้ว';
+    }
+    last.textContent = data.sync.last_completed || 'ยังไม่เคย';
+    stats.textContent =
+      `ไฟล์ทั้งหมด ${data.stats.total} · ค้นเนื้อหาได้ ${data.stats.content_indexed} · ` +
+      `ค้นชื่อ/โฟลเดอร์ได้ ${data.stats.metadata_only} · ผิดพลาด ${data.stats.errors}`;
+  }catch(e){}
+}
+setInterval(refreshStatus, 5000);
+</script>
+{% endif %}
 </body>
 </html>
