@@ -15,7 +15,7 @@ CLIENT_ID = os.getenv("MICROSOFT_CLIENT_ID", "")
 CLIENT_SECRET = os.getenv("MICROSOFT_CLIENT_SECRET", "")
 TENANT = os.getenv("MICROSOFT_TENANT", "consumers")
 AUTHORITY = f"https://login.microsoftonline.com/{TENANT}"
-SCOPES = ["User.Read", "Files.Read", "offline_access"]
+SCOPES = ["User.Read", "Files.Read"]
 
 def _load_cache():
     cache = msal.SerializableTokenCache()
