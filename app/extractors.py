@@ -1,24 +1,18 @@
 import csv
 import io
-import os
-import tempfile
-from pathlib import Path
 
 from docx import Document
 from openpyxl import load_workbook
 from pypdf import PdfReader
 
-SUPPORTED = {".docx", ".xlsx", ".pdf", ".txt", ".csv"}
+SUPPORTED_CONTENT = {".docx", ".xlsx", ".pdf", ".txt", ".csv"}
 
 def extract_text(data: bytes, extension: str) -> str:
     extension = extension.lower()
 
     if extension == ".docx":
         doc = Document(io.BytesIO(data))
-        parts = []
-        for p in doc.paragraphs:
-            if p.text.strip():
-                parts.append(p.text)
+        parts = [p.text for p in doc.paragraphs if p.text.strip()]
         for table in doc.tables:
             for row in table.rows:
                 parts.append(" | ".join(cell.text for cell in row.cells))
@@ -30,9 +24,9 @@ def extract_text(data: bytes, extension: str) -> str:
         for ws in wb.worksheets:
             parts.append(f"[ชีต: {ws.title}]")
             for row in ws.iter_rows(values_only=True):
-                vals = [str(v) for v in row if v is not None]
-                if vals:
-                    parts.append(" | ".join(vals))
+                values = [str(v) for v in row if v is not None]
+                if values:
+                    parts.append(" | ".join(values))
         return "\n".join(parts)
 
     if extension == ".pdf":
@@ -44,6 +38,8 @@ def extract_text(data: bytes, extension: str) -> str:
 
     if extension == ".csv":
         text = data.decode("utf-8-sig", errors="replace")
-        return "\n".join(" | ".join(row) for row in csv.reader(io.StringIO(text)))
+        return "\n".join(
+            " | ".join(row) for row in csv.reader(io.StringIO(text))
+        )
 
-    raise ValueError(f"ยังไม่รองรับไฟล์ {extension}")
+    raise ValueError(f"Unsupported content extension: {extension}")

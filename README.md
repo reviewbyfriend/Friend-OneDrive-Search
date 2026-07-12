@@ -1,110 +1,84 @@
-# Friend OneDrive Search — MVP 0.1
+# Friend OneDrive Search v1.0
 
-เว็บค้นหาคำในเนื้อหาไฟล์ OneDrive โดยเก็บไฟล์จริงไว้ที่ OneDrive ตามเดิม  
-ระบบใช้สิทธิ์ **อ่านอย่างเดียว (`Files.Read`)** ไม่แก้ ลบ ย้าย หรือเปลี่ยนชื่อไฟล์
+ระบบค้นหาไฟล์ OneDrive แบบ Read Only
 
-## รองรับรอบแรก
+## ฟีเจอร์
 
-- Word `.docx`
-- Excel `.xlsx`
-- PDF ที่มี text layer
-- `.txt` และ `.csv`
-- ค้นชื่อไฟล์ + ชื่อโฟลเดอร์ + เนื้อหา
-- กดเปิดไฟล์ต้นฉบับใน OneDrive
-- Delta Sync: หลังสแกนครั้งแรกจะอ่านเฉพาะรายการที่เปลี่ยน
+- เชื่อม Microsoft ครั้งเดียว
+- Auto Sync ทุก 10 นาที
+- ใช้ Delta API อ่านเฉพาะไฟล์ที่เพิ่ม แก้ไข หรือลบ
+- เก็บรายการทุกไฟล์ใน OneDrive
+- ทุกไฟล์ค้นได้จากชื่อไฟล์และชื่อโฟลเดอร์
+- `.docx`, `.xlsx`, `.pdf`, `.txt`, `.csv` ค้นข้อความภายในได้
+- `.doc`, `.xls`, รูปภาพ, ZIP และไฟล์อื่น เปิดลิงก์ OneDrive ได้
+- มีปุ่มตรวจไฟล์ทันทีและสแกนใหม่ทั้งหมด
+- หน้า `/health` ใช้ตรวจ Railway healthcheck
 
-ยังไม่รองรับ `.doc` รุ่นเก่า, `.xls` รุ่นเก่า และ PDF/รูปสแกนที่ต้อง OCR
+## อัปโหลด GitHub
 
----
+หน้าแรก repository ต้องเห็น:
 
-## ขั้นที่ 1: สร้าง Microsoft App Registration
+```text
+app/
+Dockerfile
+railway.json
+requirements.txt
+README.md
+```
 
-1. เข้า Microsoft Entra admin center: `https://entra.microsoft.com`
-2. ไปที่ **App registrations → New registration**
-3. Name: `Friend OneDrive Search`
-4. Supported account types เลือก  
-   **Personal Microsoft accounts only**  
-   (ถ้าจะรองรับทั้งบัญชีงานและส่วนตัว ให้เลือกบัญชีทุกองค์กรและ personal)
-5. ยังไม่ต้องกรอก Redirect URI แล้วกด Register
-6. จด **Application (client) ID**
-7. ไปที่ **Certificates & secrets → New client secret**
-8. จดค่าในช่อง **Value** ทันที
-9. ไปที่ **API permissions → Add a permission → Microsoft Graph → Delegated permissions**
-10. เพิ่ม:
-    - `Files.Read`
-    - `User.Read`
-    - `offline_access`
+อย่าอัปโหลดให้มีโฟลเดอร์ซ้อนอีกชั้น
 
-ห้ามเพิ่ม `Files.ReadWrite` เพราะระบบนี้ต้อง Read Only
+## Railway Variables
 
----
-
-## ขั้นที่ 2: ทดสอบในเครื่อง (ถ้ามีเครื่องที่รัน Python ได้)
-
-คัดลอก `.env.example` เป็น `.env` แล้วใส่:
-
-```env
-MICROSOFT_CLIENT_ID=...
-MICROSOFT_CLIENT_SECRET=...
+```text
+MICROSOFT_CLIENT_ID=Application client ID
+MICROSOFT_CLIENT_SECRET=Client secret VALUE
 MICROSOFT_TENANT=consumers
-REDIRECT_URI=http://localhost:8000/auth/callback
-SESSION_SECRET=ข้อความสุ่มยาวๆ
-DATA_DIR=./data
+REDIRECT_URI=https://friend-onedrive-search-production.up.railway.app/auth/callback
+SESSION_SECRET=ข้อความสุ่มยาวจริง
+DATA_DIR=/data
+MAX_FILE_MB=30
+AUTO_SYNC_MINUTES=10
+SYNC_EXTENSIONS=.docx,.xlsx,.pdf,.txt,.csv
 ```
 
-เพิ่ม Redirect URI ใน Entra:
+## Railway Volume
 
-`http://localhost:8000/auth/callback`
+Mount path:
 
-แล้วรัน:
-
-```bash
-pip install -r requirements.txt
-uvicorn app.main:app --reload
+```text
+/data
 ```
 
-เปิด `http://localhost:8000`
+## Railway Networking
 
----
+Generate Domain แล้วใช้ target port:
 
-## ขั้นที่ 3: ขึ้น Railway
+```text
+8080
+```
 
-1. สร้าง GitHub repository แล้วอัปโหลดไฟล์ทั้งหมดใน ZIP นี้
-2. Railway → New Project → Deploy from GitHub
-3. เพิ่ม Volume และ mount ที่ `/data`
-4. เพิ่ม Variables:
-   - `MICROSOFT_CLIENT_ID`
-   - `MICROSOFT_CLIENT_SECRET`
-   - `MICROSOFT_TENANT=consumers`
-   - `SESSION_SECRET` เป็นข้อความสุ่มยาว
-   - `DATA_DIR=/data`
-   - `MAX_FILE_MB=30`
-5. Generate Domain ใน Railway เช่น  
-   `https://friend-search-production.up.railway.app`
-6. ตั้ง Variable:
-   `REDIRECT_URI=https://friend-search-production.up.railway.app/auth/callback`
-7. กลับไป Entra → Authentication → Add a platform → Web
-8. เพิ่ม Redirect URI เดียวกันแบบตรงตัวทุกตัวอักษร
-9. เปิดเว็บ → กด **เชื่อมบัญชี Microsoft**
-10. กด **ซิงก์ไฟล์ที่เปลี่ยน** ครั้งแรกจะเป็น Full Scan
+## Microsoft Entra
 
----
+Authentication → Web Redirect URI:
 
-## ความปลอดภัยสำคัญ
+```text
+https://friend-onedrive-search-production.up.railway.app/auth/callback
+```
 
-- อย่าใส่ Client Secret ลง GitHub
-- Railway ควรมี Volume `/data` ไม่เช่นนั้นฐานข้อมูลและ token จะหายเมื่อ redeploy
-- เว็บรุ่นนี้เหมาะกับการใช้ส่วนตัว ควรเก็บ URL ไว้เฉพาะตัว
-- ก่อนใช้กับเอกสารราชการจริง ควรเพิ่ม PIN/Login หน้าเว็บ และพิจารณานโยบายหน่วยงานเรื่องการส่งข้อมูลขึ้น cloud
-- ไฟล์ถูกดาวน์โหลดชั่วคราวในหน่วยความจำเพื่อแยกข้อความ แต่ไม่ได้เก็บสำเนาไฟล์ถาวร
-- ฐานข้อมูล `/data/search.db` จะเก็บข้อความที่สกัดจากเอกสารเพื่อใช้ค้นหา
+Delegated permissions:
 
-## เวอร์ชันต่อไป
+```text
+Files.Read
+User.Read
+offline_access
+```
 
-- ตั้งเวลาซิงก์อัตโนมัติ
-- PIN หรือ Login ป้องกันหน้าค้นหา
-- OCR PDF/ภาพสแกน
-- รองรับ `.doc` และ `.xls`
-- กรองตามปี/ชนิดไฟล์/โฟลเดอร์
-- ไฮไลต์หลายจุดและแบ่งหน้า
-- เสียบเป็นเมนูใน Friend AI Agent
+## หลัง Deploy
+
+1. เปิด `/health`
+2. ต้องเห็น `"ok": true`
+3. เปิดหน้าเว็บหลัก
+4. กดเชื่อม Microsoft
+5. ครั้งแรกกด “สแกนใหม่ทั้งหมด” หนึ่งครั้ง
+6. หลังจากนั้นระบบตรวจอัตโนมัติ
