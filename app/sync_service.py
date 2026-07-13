@@ -17,6 +17,8 @@ Behavior:
 """
 import os
 import threading
+import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from pathlib import Path
 
 from .db import delete_file, get_file_meta, get_state, set_state, upsert_file
@@ -25,12 +27,29 @@ from .graph import download_item, iter_children, iter_delta
 
 MAX_FILE_MB = int(os.getenv("MAX_FILE_MB", "30"))
 
+# Hard ceiling per file (download + extract/OCR combined). A single
+# oversized scanned PDF used to be able to block the whole sync for many
+# minutes with no way to tell "still working" from "stuck". Past this,
+# the file is skipped and marked as an error so the run keeps moving.
+FILE_TIMEOUT_SECONDS = int(os.getenv("FILE_TIMEOUT_SECONDS", "180"))
+_EXTRACT_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="file-extract")
+
+
+def _heartbeat():
+    from datetime import datetime, timezone
+    set_state("sync_heartbeat", datetime.now(timezone.utc).isoformat())
+
 # File types whose CONTENT gets extracted into the local index.
+# NOTE: .doc/.xls/.ppt/.rtf/.odt/.ods (legacy/other-suite, converted via
+# LibreOffice in extractors.py) and .zip (recursed into) must be listed
+# here too, or they silently fall back to metadata-only even though
+# extract_text() fully supports them.
 CONTENT_INDEX_EXTENSIONS = {
     x.strip().lower()
     for x in os.getenv(
         "CONTENT_INDEX_EXTENSIONS",
-        ".docx,.xlsx,.pdf,.txt,.csv,.jpg,.jpeg,.png,.tif,.tiff,.bmp,.webp",
+        ".docx,.xlsx,.pptx,.doc,.xls,.ppt,.rtf,.odt,.ods,.zip,"
+        ".pdf,.txt,.csv,.jpg,.jpeg,.png,.tif,.tiff,.bmp,.webp",
     ).split(",")
     if x.strip()
 }
@@ -50,13 +69,21 @@ def item_path(i):
     return _clean_path((i.get("parentReference") or {}).get("path", ""), i.get("name", ""))
 
 
-def _index_file(token, meta, ext, size, out, drive_id=None):
-    """Extract + upsert one file. Skips download when unchanged."""
-    existing = get_file_meta(meta["item_id"])
-    if existing and existing[0] == meta.get("modified_at") and existing[1] != "error":
-        out["skipped_unchanged"] += 1
-        return
+def _download_and_extract(item_id, token, drive_id, ext):
+    data = download_item(item_id, token, drive_id=drive_id)
+    return extract_text(data, ext).strip()
 
+
+def _index_file(token, meta, ext, size, out, drive_id=None):
+    """Extract + upsert one file.
+
+    Skip-unchanged only applies once content has actually been captured
+    successfully (status == content_indexed). Anything metadata_only or
+    error is retried every run when the extension is eligible for content
+    extraction — this is what lets a fixed bug (e.g. a missing extension
+    in CONTENT_INDEX_EXTENSIONS) or a transient failure heal itself on the
+    next sync without needing a manual full rescan.
+    """
     if ext not in CONTENT_INDEX_EXTENSIONS or ext not in CONTENT_EXTENSIONS:
         upsert_file(meta, "", "metadata_only", "ชนิดไฟล์นี้ค้นได้เฉพาะชื่อ")
         out["metadata_only"] += 1
@@ -67,49 +94,90 @@ def _index_file(token, meta, ext, size, out, drive_id=None):
         out["metadata_only"] += 1
         return
 
+    existing = get_file_meta(meta["item_id"])
+    if existing and existing[0] == meta.get("modified_at") and existing[1] == "content_indexed":
+        out["skipped_unchanged"] += 1
+        return
+
+    future = _EXTRACT_POOL.submit(
+        _download_and_extract, meta["item_id"], token, drive_id, ext
+    )
     try:
-        txt = extract_text(download_item(meta["item_id"], token, drive_id=drive_id), ext).strip()
+        txt = future.result(timeout=FILE_TIMEOUT_SECONDS)
         if txt:
             upsert_file(meta, txt, "content_indexed", None)
             out["content_indexed"] += 1
         else:
             upsert_file(meta, "", "metadata_only", "ไม่พบข้อความในไฟล์")
             out["metadata_only"] += 1
+    except FutureTimeoutError:
+        upsert_file(
+            meta, "", "error",
+            f"ข้ามไฟล์นี้: ใช้เวลาอ่าน/OCR เกิน {FILE_TIMEOUT_SECONDS} วินาที",
+        )
+        out["errors"] += 1
+        out["timed_out"] = out.get("timed_out", 0) + 1
+        # The worker thread keeps running in the background (Python threads
+        # can't be killed); a fresh single-worker pool is spun up so the
+        # next file isn't queued behind the stuck one.
+        _replace_stuck_pool()
     except Exception as e:
         upsert_file(meta, "", "error", str(e)[:500])
         out["errors"] += 1
 
 
+def _replace_stuck_pool():
+    global _EXTRACT_POOL
+    old_pool = _EXTRACT_POOL
+    _EXTRACT_POOL = ThreadPoolExecutor(max_workers=1, thread_name_prefix="file-extract")
+    old_pool.shutdown(wait=False)
+
+
 def _walk_shared_folder(token, drive_id, item_id, base_path, out):
-    """Recursively index a shared folder living on another account's drive."""
+    """Recursively index a shared folder living on another account's drive.
+
+    Each subfolder is listed independently: if one subfolder fails (e.g.
+    transient network error, a permission quirk on a deeply-nested item),
+    only that subfolder's remaining children are skipped — every other
+    sibling and already-queued branch in the stack still gets walked.
+    Previously a single failure here silently dropped the entire rest of
+    the shared folder for that sync run.
+    """
     stack = [(item_id, base_path)]
     while stack:
         folder_id, folder_path = stack.pop()
-        for child in iter_children(token, drive_id, folder_id):
-            cid = child.get("id")
-            if not cid:
-                continue
-            name = child.get("name", "")
-            path = f"{folder_path}/{name}".replace("//", "/")
-            if child.get("folder") is not None:
-                stack.append((cid, path))
-                continue
-            if child.get("file") is None:
-                continue
-            out["processed"] += 1
-            ext = Path(name).suffix.lower()
-            size = int(child.get("size") or 0)
-            meta = {
-                "item_id": cid,
-                "name": name,
-                "path": path,
-                "web_url": child.get("webUrl"),
-                "mime_type": (child.get("file") or {}).get("mimeType"),
-                "extension": ext,
-                "modified_at": child.get("lastModifiedDateTime"),
-                "size": size,
-            }
-            _index_file(token, meta, ext, size, out, drive_id=drive_id)
+        try:
+            for child in iter_children(token, drive_id, folder_id):
+                _heartbeat()
+                cid = child.get("id")
+                if not cid:
+                    continue
+                name = child.get("name", "")
+                path = f"{folder_path}/{name}".replace("//", "/")
+                if child.get("folder") is not None:
+                    stack.append((cid, path))
+                    continue
+                if child.get("file") is None:
+                    continue
+                out["processed"] += 1
+                ext = Path(name).suffix.lower()
+                size = int(child.get("size") or 0)
+                meta = {
+                    "item_id": cid,
+                    "name": name,
+                    "path": path,
+                    "web_url": child.get("webUrl"),
+                    "mime_type": (child.get("file") or {}).get("mimeType"),
+                    "extension": ext,
+                    "modified_at": child.get("lastModifiedDateTime"),
+                    "size": size,
+                }
+                _index_file(token, meta, ext, size, out, drive_id=drive_id)
+        except Exception as e:
+            out["errors"] += 1
+            out["folder_list_failures"] = out.get("folder_list_failures", 0) + 1
+            print(f"[sync] failed listing folder {folder_path!r} (drive={drive_id}): {e}")
+            continue
 
 
 def sync_drive(token, full_scan=False):
@@ -134,6 +202,7 @@ def sync_drive(token, full_scan=False):
         shared_folders = []
 
         for i in iter_delta(token, delta):
+            _heartbeat()
             if "__delta_link__" in i:
                 new = i["__delta_link__"]
                 continue

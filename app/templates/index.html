@@ -11,6 +11,12 @@ h1{margin:0 0 4px}.sub,.meta,.path{color:#69707d}.path{font-size:13px;word-break
 button,.btn{background:#1769e0;color:#fff;border:0;border-radius:11px;padding:12px 17px;font-weight:750;text-decoration:none;display:inline-block;cursor:pointer}.secondary{background:#e8eef8;color:#174a91}.actions{display:flex;gap:8px;flex-wrap:wrap}.success{background:#eaf8ed}.notice{background:#fff7d8}.error{background:#ffe9e9;color:#8b1d1d}.warning{background:#fff5dc;color:#6b4b00}
 .result-head{display:flex;gap:10px;align-items:flex-start}.result-head h3{margin:0;flex:1}.snippet{line-height:1.7}.badge{display:inline-block;padding:5px 9px;border-radius:999px;font-size:12px;background:#eef1f5;margin:5px 5px 5px 0}.badge.ms{background:#e8f0fe;color:#174ea6}.badge.local{background:#eaf8ed;color:#176b36}mark{background:#fff1a8}.counts{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}.count{background:#f7f9fc;border-radius:12px;padding:12px}.count b{font-size:22px;display:block}.help{font-size:13px;color:#666;line-height:1.7}.help code{background:#eef1f5;padding:2px 5px;border-radius:5px}
 .tabs{display:flex;gap:8px;flex-wrap:wrap;margin:16px 0 4px}.tab{background:#e8eef8;color:#174a91;border:0;border-radius:11px;padding:10px 15px;font-weight:700;cursor:pointer;font-size:14px}.tab.active{background:#1769e0;color:#fff}.tabpane{display:none}.tabpane.active{display:block}
+.typeahead{position:relative;flex:1;min-width:0}.typeahead input{width:100%;box-sizing:border-box}
+.suggest-box{display:none;position:absolute;top:calc(100% + 4px);left:0;right:0;background:#fff;border:1px solid #d7dceb;border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.08);z-index:20;overflow:hidden;max-height:280px;overflow-y:auto}
+.suggest-box.open{display:block}
+.suggest-item{padding:11px 14px;cursor:pointer;font-size:15px;border-bottom:1px solid #f0f2f7}
+.suggest-item:last-child{border-bottom:0}
+.suggest-item:hover,.suggest-item.active{background:#eef4ff}
 @media(max-width:620px){.search{flex-direction:column}.search button{width:100%}.wrap{padding-top:16px}}
 </style>
 </head>
@@ -33,6 +39,15 @@ button,.btn{background:#1769e0;color:#fff;border:0;border-radius:11px;padding:12
 {% if background_index_enabled %}
 <div class="actions"><form method="post" action="/sync"><button class="secondary">อัปเดตดัชนี OCR</button></form></div>
 <p class="meta">ดัชนีเสริม: {{ stats.total }} ไฟล์ · อ่านเนื้อหาแล้ว {{ stats.content_indexed }} · อ่านไม่ได้/ชื่อเท่านั้น {{ stats.metadata_only }} · ผิดพลาด {{ stats.errors }}</p>
+{% if sync.sync_running %}
+{% if sync.stale %}
+<div class="card warning">⚠️ ซิงก์ดูเหมือนหยุดนิ่ง (ไม่มีความคืบหน้ามากกว่า {{ (600/60)|int }} นาที) — เซิร์ฟเวอร์อาจรีสตาร์ทหรือค้างที่ไฟล์ใหญ่ กดปุ่ม "อัปเดตดัชนี OCR" ซ้ำได้เลย จะทำต่อจากจุดเดิม</div>
+{% else %}
+<p class="meta">🔄 กำลังซิงก์อยู่ · อัปเดตล่าสุด {{ sync.heartbeat or "-" }}</p>
+{% endif %}
+{% elif sync.last_result and sync.last_result.status == "interrupted" %}
+<div class="card warning">{{ sync.last_result.note }}</div>
+{% endif %}
 {% else %}
 <span class="badge local">ดัชนีเดิมใช้เป็นผลสำรอง</span>
 {% endif %}
@@ -40,12 +55,79 @@ button,.btn{background:#1769e0;color:#fff;border:0;border-radius:11px;padding:12
 </div>
 
 <div class="card">
-<form class="search" method="get" action="/">
-<input name="q" value="{{ q }}" placeholder="เช่น สำเริง, เลขคดี, วันเกิด, ชื่อจำเลย" autofocus>
+<form class="search" method="get" action="/" id="searchForm" autocomplete="off">
+<div class="typeahead">
+<input name="q" id="searchInput" value="{{ q }}" placeholder="เช่น สำเริง, เลขคดี, วันเกิด, ชื่อจำเลย" autofocus>
+<div id="suggestBox" class="suggest-box"></div>
+</div>
 <button>ค้นหา</button>
 </form>
-<div class="help"><b>ค้นได้ทันที ไม่ต้องรอ index:</b> ค้นสดจาก Microsoft ก่อน แล้วเสริมด้วย OCR Database ซึ่งอ่านเนื้อหาไฟล์ทั้งในไดรฟ์ตัวเองและโฟลเดอร์ที่แชร์มา (docx, xlsx, PDF, รูปสแกน ฯลฯ) — โฟลเดอร์แชร์ต้องกด "เพิ่มทางลัดไปยังไฟล์ของฉัน" ใน OneDrive ก่อนหนึ่งครั้ง</div>
+<div class="help"><b>ค้นได้ทันที ไม่ต้องรอ index:</b> ค้นสดจาก Microsoft ก่อน แล้วเสริมด้วย OCR Database ซึ่งอ่านเนื้อหาไฟล์ทั้งในไดรฟ์ตัวเองและโฟลเดอร์ที่แชร์มา (docx, xlsx, pptx, PDF, รูปสแกน, zip ฯลฯ) — โฟลเดอร์แชร์ต้องกด "เพิ่มทางลัดไปยังไฟล์ของฉัน" ใน OneDrive ก่อนหนึ่งครั้ง</div>
 </div>
+
+<script>
+(function(){
+  var input = document.getElementById('searchInput');
+  var box = document.getElementById('suggestBox');
+  var items = [];
+  var activeIndex = -1;
+  var debounceTimer = null;
+
+  function hide(){ box.classList.remove('open'); box.innerHTML=''; items=[]; activeIndex=-1; }
+
+  function render(){
+    if (!items.length){ hide(); return; }
+    box.innerHTML = items.map(function(text, i){
+      return '<div class="suggest-item' + (i===activeIndex ? ' active' : '') + '" data-i="' + i + '">' + text.replace(/</g,'&lt;') + '</div>';
+    }).join('');
+    box.classList.add('open');
+  }
+
+  function fetchSuggestions(q){
+    if (!q || q.trim().length < 1){ hide(); return; }
+    fetch('/suggest?q=' + encodeURIComponent(q))
+      .then(function(r){ return r.ok ? r.json() : {suggestions: []}; })
+      .then(function(data){
+        items = (data.suggestions || []).slice(0, 10);
+        activeIndex = -1;
+        render();
+      })
+      .catch(function(){ hide(); });
+  }
+
+  input.addEventListener('input', function(){
+    clearTimeout(debounceTimer);
+    var q = input.value;
+    debounceTimer = setTimeout(function(){ fetchSuggestions(q); }, 200);
+  });
+
+  input.addEventListener('keydown', function(e){
+    if (!items.length) return;
+    if (e.key === 'ArrowDown'){
+      e.preventDefault(); activeIndex = Math.min(activeIndex+1, items.length-1); render();
+    } else if (e.key === 'ArrowUp'){
+      e.preventDefault(); activeIndex = Math.max(activeIndex-1, 0); render();
+    } else if (e.key === 'Enter'){
+      if (activeIndex >= 0){ e.preventDefault(); input.value = items[activeIndex]; hide(); input.form.submit(); }
+    } else if (e.key === 'Escape'){
+      hide();
+    }
+  });
+
+  box.addEventListener('mousedown', function(e){
+    var el = e.target.closest('.suggest-item');
+    if (!el) return;
+    e.preventDefault();
+    input.value = items[parseInt(el.dataset.i, 10)];
+    hide();
+    input.form.submit();
+  });
+
+  document.addEventListener('click', function(e){
+    if (!box.contains(e.target) && e.target !== input) hide();
+  });
+})();
+</script>
 
 {% if q %}
 <div class="counts">
@@ -63,6 +145,7 @@ button,.btn{background:#1769e0;color:#fff;border:0;border-radius:11px;padding:12
 <div class="path">{{ r.path or "" }}</div>
 {% if r.source == "Microsoft Search" %}<span class="badge ms">{{ r.source }}</span>{% else %}<span class="badge local">{{ r.source }}</span>{% endif %}
 {% if r.status == "content_indexed" %}<span class="badge">อ่านข้อความในไฟล์แล้ว (OCR)</span>{% endif %}
+{% if r.fuzzy %}<span class="badge warning">ผลลัพธ์โดยประมาณ (ใกล้เคียงคำค้น)</span>{% endif %}
 {% if r.snippet %}<p class="snippet">{{ r.snippet|safe }}</p>{% endif %}
 <div class="meta">แก้ไขล่าสุด {{ r.modified_at or "-" }} · {{ r.extension or "ไม่ทราบชนิด" }}</div>
 {% if r.web_url %}<p><a class="btn secondary" target="_blank" rel="noopener" href="{{ r.web_url }}">เปิดไฟล์ใน OneDrive</a></p>{% endif %}

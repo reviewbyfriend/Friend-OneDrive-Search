@@ -11,6 +11,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
 from .db import (
+    get_state,
     init_db,
     search_files,
     set_state,
@@ -104,7 +105,21 @@ async def periodic_sync_loop():
 @app.on_event("startup")
 async def startup():
     init_db()
+    # A container restart mid-sync leaves sync_running="1" stuck forever
+    # since the finally-block that clears it never ran. Detect and reset.
+    was_running = get_state("sync_running") == "1"
     set_state("sync_running", "0")
+    if was_running:
+        set_state(
+            "last_sync_result",
+            json.dumps(
+                {
+                    "status": "interrupted",
+                    "note": "เซิร์ฟเวอร์รีสตาร์ทระหว่างซิงก์ กดปุ่มอัปเดตดัชนี OCR เพื่อทำต่อได้ (ทำต่อจากจุดเดิม ไม่เริ่มใหม่)",
+                },
+                ensure_ascii=False,
+            ),
+        )
     if ENABLE_BACKGROUND_INDEX:
         asyncio.create_task(periodic_sync_loop())
 

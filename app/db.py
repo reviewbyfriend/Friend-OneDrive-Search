@@ -4,7 +4,10 @@ import os
 import re
 import sqlite3
 import unicodedata
+from datetime import datetime, timezone
 from pathlib import Path
+
+STALE_SYNC_SECONDS = int(os.getenv("STALE_SYNC_SECONDS", "600"))
 
 DATA_DIR = Path(os.getenv("DATA_DIR", "/data"))
 try:
@@ -376,8 +379,70 @@ def search_files(query, limit=100):
         )
     )
 
+    results = results[:limit]
+
+    # Fuzzy fallback: only for a single plain term with zero strict hits.
+    # Boolean/phrase/wildcard queries stay exact — fuzzy on those would be
+    # ambiguous (what would "OR" or "exclude" even mean for a typo-match?).
+    if not results and len(groups) == 1 and len(groups[0]) == 1 and not excludes:
+        term = groups[0][0]
+        if "*" not in term:
+            results = _fuzzy_filename_search(term, limit)
+
     _record_search(query)
-    return results[:limit]
+    return results
+
+def _subsequence_span(needle, haystack):
+    """None if needle isn't a subsequence of haystack; else the span
+    (end - start index) of the tightest match found, smaller = closer."""
+    if not needle:
+        return None
+    i = 0
+    start = None
+    last = None
+    for idx, ch in enumerate(haystack):
+        if ch == needle[i]:
+            if start is None:
+                start = idx
+            last = idx
+            i += 1
+            if i == len(needle):
+                return last - start
+    return None
+
+def _fuzzy_filename_search(term, limit=50):
+    """Typo/skip/transposition-tolerant fallback over file names only.
+
+    Matches when every character of the (normalized) query appears in the
+    filename in the same order, not necessarily contiguously — e.g. typing
+    "เออิ" or "เอกอิ" still finds "เอกอินทร์". Runs only when the exact
+    substring search already came back empty, and only scans names (not
+    file content) to keep it cheap even with tens of thousands of files.
+    """
+    needle = normalize_text(term.replace("*", "").strip())
+    if len(needle) < 2:
+        return []
+
+    with connect() as conn:
+        rows = conn.execute("SELECT * FROM files").fetchall()
+
+    scored = []
+    for row in rows:
+        name_norm = normalize_text(row["name"])
+        span = _subsequence_span(needle, name_norm)
+        if span is not None:
+            scored.append((span, row))
+
+    scored.sort(key=lambda x: (x[0], x[1]["name"] or ""))
+
+    results = []
+    for span, row in scored[:limit]:
+        item = dict(row)
+        item["score"] = span
+        item["snippet"] = ""
+        item["fuzzy"] = True
+        results.append(item)
+    return results
 
 def suggestions(prefix, limit=10):
     prefix = (prefix or "").strip()
@@ -480,9 +545,24 @@ def sync_state():
     except Exception:
         parsed = None
 
+    running = get_state("sync_running") == "1"
+    heartbeat = get_state("sync_heartbeat")
+    stale = False
+    if running and heartbeat:
+        try:
+            age = (
+                datetime.now(timezone.utc)
+                - datetime.fromisoformat(heartbeat)
+            ).total_seconds()
+            stale = age > STALE_SYNC_SECONDS
+        except Exception:
+            stale = False
+
     return {
         "last_started": get_state("last_sync_started"),
         "last_completed": get_state("last_sync_completed"),
         "last_result": parsed,
-        "sync_running": get_state("sync_running") == "1"
+        "sync_running": running,
+        "heartbeat": heartbeat,
+        "stale": stale,
     }
