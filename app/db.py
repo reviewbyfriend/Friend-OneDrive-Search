@@ -160,62 +160,6 @@ def upsert_file(meta, content="", status="metadata_only", error=None):
             content
         ))
 
-
-def upsert_metadata(meta, status="pending", error=None):
-    """Insert/update metadata without erasing already indexed content when unchanged."""
-    with connect() as conn:
-        row = conn.execute(
-            "SELECT modified_at,size,content,status FROM files WHERE item_id=?",
-            (meta["item_id"],)
-        ).fetchone()
-        unchanged = bool(
-            row and row["modified_at"] == meta.get("modified_at")
-            and int(row["size"] or 0) == int(meta.get("size") or 0)
-        )
-        if unchanged and row["status"] == "content_indexed":
-            effective_status = "content_indexed"
-            content = row["content"] or ""
-            effective_error = None
-        else:
-            effective_status = status
-            content = "" if not row else (row["content"] or "" if unchanged else "")
-            effective_error = error
-
-        normalized_blob = normalize_text(
-            f"{meta.get('name','')}\n{meta.get('path','')}\n{content}"
-        )
-        conn.execute("""
-        INSERT INTO files(
-            item_id,name,path,web_url,mime_type,extension,modified_at,size,
-            content,search_text_norm,indexed_at,status,error
-        ) VALUES(?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP,?,?)
-        ON CONFLICT(item_id) DO UPDATE SET
-            name=excluded.name,path=excluded.path,web_url=excluded.web_url,
-            mime_type=excluded.mime_type,extension=excluded.extension,
-            modified_at=excluded.modified_at,size=excluded.size,
-            content=excluded.content,search_text_norm=excluded.search_text_norm,
-            indexed_at=CURRENT_TIMESTAMP,status=excluded.status,error=excluded.error
-        """, (
-            meta["item_id"], meta.get("name") or "", meta.get("path") or "",
-            meta.get("web_url"), meta.get("mime_type"), meta.get("extension"),
-            meta.get("modified_at"), int(meta.get("size") or 0), content,
-            normalized_blob, effective_status, effective_error
-        ))
-        conn.execute("DELETE FROM files_fts WHERE item_id=?", (meta["item_id"],))
-        conn.execute("INSERT INTO files_fts(item_id,name,path,content) VALUES(?,?,?,?)",
-                     (meta["item_id"], meta.get("name") or "", meta.get("path") or "", content))
-        return effective_status
-
-
-def list_pending_files(limit=100):
-    with connect() as conn:
-        rows = conn.execute("""
-            SELECT item_id,name,path,web_url,mime_type,extension,modified_at,size
-            FROM files WHERE status='pending'
-            ORDER BY indexed_at ASC LIMIT ?
-        """, (limit,)).fetchall()
-        return [dict(r) for r in rows]
-
 def delete_file(item_id):
     with connect() as conn:
         conn.execute("DELETE FROM files WHERE item_id=?", (item_id,))
@@ -497,7 +441,7 @@ def stats():
             "SELECT COUNT(*) c FROM files WHERE status='error'"
         ).fetchone()["c"]
         pending = conn.execute(
-            "SELECT COUNT(*) c FROM files WHERE status='pending'"
+            "SELECT COUNT(*) c FROM files WHERE status='pending_content'"
         ).fetchone()["c"]
         last_indexed = conn.execute(
             "SELECT MAX(indexed_at) x FROM files"
@@ -538,3 +482,71 @@ def sync_state():
         "last_result": parsed,
         "sync_running": get_state("sync_running") == "1"
     }
+
+# --- restart-safe indexing queue helpers ---
+def upsert_metadata(meta, desired_status="pending_content", error=None):
+    """Store metadata immediately without erasing an unchanged content index."""
+    with connect() as conn:
+        old = conn.execute(
+            "SELECT modified_at,status,content FROM files WHERE item_id=?",
+            (meta["item_id"],),
+        ).fetchone()
+
+        unchanged = bool(
+            old
+            and (old["modified_at"] or "") == (meta.get("modified_at") or "")
+            and old["status"] == "content_indexed"
+            and (old["content"] or "")
+        )
+        status = "content_indexed" if unchanged else desired_status
+        content = old["content"] if unchanged else ""
+        normalized_blob = normalize_text(
+            f"{meta.get('name','')}\n{meta.get('path','')}\n{content or ''}"
+        )
+
+        conn.execute("""
+        INSERT INTO files(
+            item_id,name,path,web_url,mime_type,extension,modified_at,size,
+            content,search_text_norm,indexed_at,status,error
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP,?,?)
+        ON CONFLICT(item_id) DO UPDATE SET
+            name=excluded.name,path=excluded.path,web_url=excluded.web_url,
+            mime_type=excluded.mime_type,extension=excluded.extension,
+            modified_at=excluded.modified_at,size=excluded.size,
+            content=excluded.content,search_text_norm=excluded.search_text_norm,
+            indexed_at=CURRENT_TIMESTAMP,status=excluded.status,error=excluded.error
+        """, (
+            meta["item_id"], meta.get("name") or "", meta.get("path") or "",
+            meta.get("web_url"), meta.get("mime_type"), meta.get("extension"),
+            meta.get("modified_at"), int(meta.get("size") or 0), content or "",
+            normalized_blob, status, None if unchanged else error,
+        ))
+        conn.execute("DELETE FROM files_fts WHERE item_id=?", (meta["item_id"],))
+        conn.execute(
+            "INSERT INTO files_fts(item_id,name,path,content) VALUES(?,?,?,?)",
+            (meta["item_id"], meta.get("name") or "", meta.get("path") or "", content or ""),
+        )
+    return status
+
+
+def pending_files(limit=50):
+    with connect() as conn:
+        rows = conn.execute("""
+            SELECT item_id,name,path,web_url,mime_type,extension,modified_at,size
+            FROM files
+            WHERE status='pending_content'
+            ORDER BY indexed_at ASC
+            LIMIT ?
+        """, (limit,)).fetchall()
+        return [dict(row) for row in rows]
+
+
+def pending_count():
+    with connect() as conn:
+        return conn.execute(
+            "SELECT COUNT(*) c FROM files WHERE status='pending_content'"
+        ).fetchone()["c"]
+
+
+def update_content_result(meta, content, status, error=None):
+    upsert_file(meta, content or "", status, error)

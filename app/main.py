@@ -12,6 +12,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from .db import (
     init_db,
+    get_state,
     search_files,
     set_state,
     stats,
@@ -95,7 +96,10 @@ async def periodic_sync_loop():
         except Exception:
             pass
 
-        await asyncio.sleep(AUTO_SYNC_MINUTES * 60)
+        state = sync_state()
+        pending = stats().get("pending", 0)
+        unfinished = bool(get_state("scan_cursor")) or pending > 0
+        await asyncio.sleep(30 if unfinished else AUTO_SYNC_MINUTES * 60)
 
 @app.on_event("startup")
 async def startup():
