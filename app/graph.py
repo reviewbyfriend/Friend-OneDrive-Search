@@ -1,4 +1,5 @@
 import os
+import time
 from pathlib import Path
 
 import msal
@@ -19,12 +20,12 @@ CLIENT_ID = os.getenv("MICROSOFT_CLIENT_ID", "").strip()
 CLIENT_SECRET = os.getenv("MICROSOFT_CLIENT_SECRET", "").strip()
 TENANT = os.getenv("MICROSOFT_TENANT", "consumers").strip() or "consumers"
 AUTHORITY = f"https://login.microsoftonline.com/{TENANT}"
-
-# Do not include offline_access here. MSAL handles reserved scopes itself.
 SCOPES = ["User.Read", "Files.Read"]
+
 
 def configured():
     return bool(CLIENT_ID and CLIENT_SECRET)
+
 
 def _load_cache():
     cache = msal.SerializableTokenCache()
@@ -35,9 +36,11 @@ def _load_cache():
             pass
     return cache
 
+
 def _save_cache(cache):
     if cache.has_state_changed:
         CACHE_FILE.write_text(cache.serialize(), encoding="utf-8")
+
 
 def _build_app(cache):
     if not configured():
@@ -46,8 +49,9 @@ def _build_app(cache):
         CLIENT_ID,
         authority=AUTHORITY,
         client_credential=CLIENT_SECRET,
-        token_cache=cache
+        token_cache=cache,
     )
+
 
 def get_auth_url(redirect_uri, state):
     cache = _load_cache()
@@ -56,10 +60,11 @@ def get_auth_url(redirect_uri, state):
         SCOPES,
         redirect_uri=redirect_uri,
         state=state,
-        prompt="select_account"
+        prompt="select_account",
     )
     _save_cache(cache)
     return url
+
 
 def exchange_code(code, redirect_uri):
     cache = _load_cache()
@@ -67,61 +72,75 @@ def exchange_code(code, redirect_uri):
     result = app.acquire_token_by_authorization_code(
         code,
         scopes=SCOPES,
-        redirect_uri=redirect_uri
+        redirect_uri=redirect_uri,
     )
     _save_cache(cache)
     return result
 
+
 def get_access_token():
     if not configured():
         return None
-
     cache = _load_cache()
     app = _build_app(cache)
     accounts = app.get_accounts()
-
     if not accounts:
         return None
-
     result = app.acquire_token_silent(SCOPES, account=accounts[0])
     _save_cache(cache)
     return result.get("access_token") if result else None
 
-def graph_get(url, token):
-    response = requests.get(
-        url,
-        headers={"Authorization": f"Bearer {token}"},
-        timeout=90
-    )
-    response.raise_for_status()
-    return response.json()
+
+def graph_get(url, token, retries=6):
+    last_error = None
+    for attempt in range(retries):
+        try:
+            response = requests.get(
+                url,
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=90,
+            )
+            if response.status_code in {429, 500, 502, 503, 504}:
+                wait = int(response.headers.get("Retry-After", "0") or 0)
+                time.sleep(wait if wait > 0 else min(2 ** attempt, 30))
+                last_error = RuntimeError(
+                    f"Microsoft Graph temporary error {response.status_code}"
+                )
+                continue
+            response.raise_for_status()
+            return response.json()
+        except (requests.Timeout, requests.ConnectionError) as exc:
+            last_error = exc
+            time.sleep(min(2 ** attempt, 30))
+    raise last_error or RuntimeError("Microsoft Graph request failed")
+
 
 def download_item(item_id, token):
     response = requests.get(
         f"{GRAPH}/me/drive/items/{item_id}/content",
         headers={"Authorization": f"Bearer {token}"},
-        timeout=180
+        timeout=180,
     )
     response.raise_for_status()
     return response.content
 
-def iter_delta(token, delta_url=None):
-    url = delta_url or (
+
+def delta_start_url():
+    return (
         f"{GRAPH}/me/drive/root/delta"
         "?$select=id,name,size,lastModifiedDateTime,webUrl,"
         "file,folder,parentReference,deleted"
+        "&$top=200"
     )
 
+
+def iter_delta_pages(token, start_url=None):
+    """Yield (items, next_link, delta_link) one Graph page at a time."""
+    url = start_url or delta_start_url()
     while url:
         payload = graph_get(url, token)
-
-        for item in payload.get("value", []):
-            yield item
-
+        items = payload.get("value", [])
         next_link = payload.get("@odata.nextLink")
-        if next_link:
-            url = next_link
-            continue
-
-        yield {"__delta_link__": payload.get("@odata.deltaLink")}
-        break
+        delta_link = payload.get("@odata.deltaLink")
+        yield items, next_link, delta_link
+        url = next_link
