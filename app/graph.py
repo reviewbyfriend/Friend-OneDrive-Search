@@ -3,6 +3,7 @@ import os
 import re
 import time
 from pathlib import Path
+from urllib.parse import quote
 
 import msal
 import requests
@@ -300,6 +301,112 @@ def microsoft_search(token, query, *, page_size=50, max_results=200):
         "total": total or len(results),
         "provider": "Microsoft Search",
     }
+
+
+def drive_search(token, query, *, max_results=200):
+    """Search personal OneDrive via GET /me/drive/root/search(q='...').
+
+    This is the ONLY live-search endpoint Microsoft supports for personal
+    (MSA) accounts. It matches file names, metadata, AND file content that
+    OneDrive has indexed (docx/xlsx/pdf with text, etc).
+    Pagination follows @odata.nextLink. Errors are logged with
+    status_code + response.text and raised — never swallowed.
+    """
+    query = (query or "").strip()
+    if not query:
+        return {"results": [], "total": 0, "provider": "none"}
+
+    escaped = query.replace("'", "''")
+    url = (
+        f"{GRAPH}/me/drive/root/search(q='{quote(escaped)}')"
+        "?$top=200&$select=id,name,webUrl,size,lastModifiedDateTime,file,folder,parentReference"
+    )
+
+    results = []
+    while url and len(results) < max_results:
+        response = None
+        last_exc = None
+        for attempt in range(3):
+            try:
+                response = requests.get(
+                    url,
+                    headers={"Authorization": f"Bearer {token}"},
+                    timeout=60,
+                )
+            except (requests.Timeout, requests.ConnectionError) as exc:
+                last_exc = exc
+                time.sleep(min(2 ** attempt, 8))
+                continue
+            if response.status_code == 429 or response.status_code >= 500:
+                print(
+                    f"[drive_search] transient error status={response.status_code} "
+                    f"body={response.text[:500]}"
+                )
+                wait = int(response.headers.get("Retry-After", "0") or 0)
+                time.sleep(wait if wait > 0 else min(2 ** attempt, 8))
+                continue
+            break
+
+        if response is None:
+            raise MicrosoftSearchError(
+                0, str(last_exc), f"เชื่อมต่อ OneDrive Search ไม่ได้: {last_exc}"
+            )
+        if response.status_code != 200:
+            print(
+                f"[drive_search] ERROR status_code={response.status_code} "
+                f"response.text={response.text}"
+            )
+            raise MicrosoftSearchError(response.status_code, response.text)
+
+        payload = response.json()
+        for resource in payload.get("value", []):
+            if resource.get("folder") is not None:
+                continue
+            results.append(_resource_to_result(resource))
+        url = payload.get("@odata.nextLink")
+
+    for item in results:
+        item["source"] = "Microsoft Search"
+
+    return {
+        "results": results[:max_results],
+        "total": len(results),
+        "provider": "OneDrive Search (ค้นชื่อไฟล์ + เนื้อหาที่ Microsoft ทำดัชนี)",
+    }
+
+
+def live_search(token, query, *, page_size=50, max_results=200):
+    """Route to the correct live-search endpoint for the account type.
+
+    - MICROSOFT_TENANT=consumers (บัญชีส่วนตัว/MSA): /search/query is NOT
+      supported by Microsoft ("This API is not supported for MSA accounts"),
+      so use the OneDrive drive search endpoint directly.
+    - Work/School tenants: use Microsoft Graph Search API (/search/query).
+    Override with LIVE_SEARCH_PROVIDER=graph|drive|auto.
+    """
+    mode = os.getenv("LIVE_SEARCH_PROVIDER", "auto").strip().lower()
+    if mode == "graph":
+        return microsoft_search(token, query, page_size=page_size, max_results=max_results)
+    if mode == "drive":
+        return drive_search(token, query, max_results=max_results)
+
+    # auto
+    if TENANT.lower() in {"consumers"}:
+        return drive_search(token, query, max_results=max_results)
+    try:
+        return microsoft_search(token, query, page_size=page_size, max_results=max_results)
+    except MicrosoftSearchError as exc:
+        # Only switch when Microsoft explicitly says MSA is unsupported —
+        # and say so visibly. Any other error still surfaces as-is.
+        if "not supported for MSA" in (exc.body_text or ""):
+            out = drive_search(token, query, max_results=max_results)
+            out["warning"] = (
+                "บัญชีนี้เป็นบัญชีส่วนตัว (MSA) — Microsoft Graph Search API ใช้ไม่ได้ "
+                "จึงใช้ OneDrive Search แทน (ค้นชื่อไฟล์ + เนื้อหาที่ Microsoft ทำดัชนี) | "
+                f"รายละเอียดจาก Microsoft: {exc.body_text[:300]}"
+            )
+            return out
+        raise
 
 
 def iter_delta(token, delta_url=None):

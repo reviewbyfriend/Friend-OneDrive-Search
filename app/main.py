@@ -25,7 +25,7 @@ from .graph import (
     get_access_token,
     get_auth_url,
     get_account,
-    microsoft_search,
+    live_search,
     MicrosoftSearchError
 )
 from .sync_service import sync_drive
@@ -128,7 +128,7 @@ def home(request: Request, q: str = ""):
 
     if q and connected:
         try:
-            live = microsoft_search(token, q, page_size=50, max_results=200)
+            live = live_search(token, q, page_size=50, max_results=200)
             microsoft_results = live.get("results", [])
             microsoft_total = live.get("total", len(microsoft_results))
             microsoft_provider = live.get("provider")
