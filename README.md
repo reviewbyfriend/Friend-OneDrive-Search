@@ -1,4 +1,4 @@
-# Friend OneDrive Search v1.1 Universal Search
+# Friend OneDrive Search v1.2 Advanced Search
 
 - ค้นภาษาไทยแบบบางส่วนด้วย LIKE + FTS5
 - สำเริง เจอ นายสำเริง แม้คำติดกัน
@@ -9,3 +9,6 @@
 
 เพิ่ม Railway Variables: ENABLE_OCR=true, OCR_LANG=tha+eng, OCR_MAX_PAGES=20
 หลัง Deploy ให้กดสแกนใหม่ทั้งหมดหนึ่งครั้ง
+
+
+ดูรูปแบบค้นหาเพิ่มเติมใน `README_ADVANCED_SEARCH.md`

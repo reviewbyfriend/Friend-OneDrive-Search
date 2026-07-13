@@ -20,7 +20,14 @@ button,.btn{background:#1769e0;color:white;border:0;border-radius:11px;padding:1
 mark{background:#fff1a8}
 .meta{font-size:12px;color:#777}
 .badge{display:inline-block;padding:4px 8px;border-radius:999px;font-size:12px;background:#eef1f5;margin:4px 4px 4px 0}
-@media(max-width:600px){.search{flex-direction:column}}
+.search-wrap{position:relative;flex:1}
+.search-wrap input{width:100%;box-sizing:border-box}
+.suggestions{position:absolute;left:0;right:0;top:100%;z-index:20;background:white;border:1px solid #d9dee8;border-radius:0 0 12px 12px;box-shadow:0 8px 20px rgba(0,0,0,.12);overflow:hidden;display:none}
+.suggestion{padding:10px 12px;cursor:pointer;border-bottom:1px solid #f0f1f4}
+.suggestion:hover{background:#f4f7fc}
+.search-help{font-size:13px;color:#666;line-height:1.7;margin-top:10px}
+.search-help code{background:#eef1f5;padding:2px 5px;border-radius:5px}
+@media(max-width:600px){.search{flex-direction:column}.suggestions{position:static}}
 </style>
 </head>
 <body>
@@ -80,14 +87,26 @@ mark{background:#fff1a8}
 </div>
 
 <div class="card">
-<form class="search" method="get" action="/">
+<form class="search" method="get" action="/" autocomplete="off">
+<div class="search-wrap">
 <input
+  id="search-input"
   name="q"
   value="{{ q }}"
-  placeholder="ชื่อไฟล์ ชื่อจำเลย เลขรับ เลขคดี หรือคำในเอกสาร"
+  placeholder="เช่น สำเริง วันเกิด"
 >
+<div id="suggestions" class="suggestions"></div>
+</div>
 <button>ค้นหา</button>
 </form>
+<div class="search-help">
+<b>ค้นหลายคำได้:</b>
+<code>สำเริง วันเกิด</code> = ต้องมีทั้งสองคำ,
+<code>สำเริง | สมชาย</code> = มีคำใดคำหนึ่ง,
+<code>"นายสำเริง ใจดี"</code> = วลีตรงตัว,
+<code>สำเริง -เชียงใหม่</code> = ตัดไฟล์ที่มีเชียงใหม่,
+<code>สำเริ*</code> = คำขึ้นต้น/ใกล้เคียง
+</div>
 </div>
 
 {% if q %}
@@ -158,5 +177,64 @@ async function refreshStatus(){
 setInterval(refreshStatus, 5000);
 </script>
 {% endif %}
+
+<script>
+(function(){
+  const input = document.getElementById('search-input');
+  const box = document.getElementById('suggestions');
+  if(!input || !box) return;
+
+  let timer = null;
+  let controller = null;
+
+  function closeBox(){
+    box.style.display = 'none';
+    box.innerHTML = '';
+  }
+
+  input.addEventListener('input', function(){
+    clearTimeout(timer);
+    const q = input.value.trim();
+    if(!q){ closeBox(); return; }
+
+    timer = setTimeout(async function(){
+      try{
+        if(controller) controller.abort();
+        controller = new AbortController();
+        const response = await fetch('/suggest?q=' + encodeURIComponent(q), {
+          cache: 'no-store',
+          signal: controller.signal
+        });
+        const data = await response.json();
+        const items = data.suggestions || [];
+        box.innerHTML = '';
+
+        if(!items.length){ closeBox(); return; }
+
+        items.forEach(function(value){
+          const div = document.createElement('div');
+          div.className = 'suggestion';
+          div.textContent = value;
+          div.addEventListener('mousedown', function(event){
+            event.preventDefault();
+            input.value = value;
+            closeBox();
+            input.focus();
+          });
+          box.appendChild(div);
+        });
+        box.style.display = 'block';
+      }catch(error){}
+    }, 220);
+  });
+
+  document.addEventListener('click', function(event){
+    if(!box.contains(event.target) && event.target !== input){
+      closeBox();
+    }
+  });
+})();
+</script>
+
 </body>
 </html>

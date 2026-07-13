@@ -16,7 +16,8 @@ from .db import (
     set_state,
     stats,
     sync_state,
-    list_problem_files
+    list_problem_files,
+    suggestions
 )
 from .graph import (
     configured,
@@ -193,6 +194,11 @@ def full_rescan(background_tasks: BackgroundTasks):
 @app.get("/problems", response_class=HTMLResponse)
 def problems(request: Request):
     return templates.TemplateResponse("problems.html", {"request": request, "files": list_problem_files(), "stats": stats()})
+
+
+@app.get("/suggest")
+def suggest(q: str = ""):
+    return {"suggestions": suggestions(q, limit=10)}
 
 @app.get("/sync-status")
 def sync_status():
