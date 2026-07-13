@@ -160,6 +160,14 @@ def upsert_file(meta, content="", status="metadata_only", error=None):
             content
         ))
 
+def get_file_meta(item_id):
+    """Return (modified_at, status) for an indexed item, or None."""
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT modified_at,status FROM files WHERE item_id=?", (item_id,)
+        ).fetchone()
+        return (row["modified_at"], row["status"]) if row else None
+
 def delete_file(item_id):
     with connect() as conn:
         conn.execute("DELETE FROM files WHERE item_id=?", (item_id,))

@@ -412,7 +412,7 @@ def live_search(token, query, *, page_size=50, max_results=200):
 def iter_delta(token, delta_url=None):
     url = delta_url or (
         f"{GRAPH}/me/drive/root/delta"
-        "?$select=id,name,size,lastModifiedDateTime,webUrl,file,folder,parentReference,deleted"
+        "?$select=id,name,size,lastModifiedDateTime,webUrl,file,folder,parentReference,deleted,remoteItem"
     )
     while url:
         payload = graph_get(url, token)
@@ -424,3 +424,21 @@ def iter_delta(token, delta_url=None):
             continue
         yield {"__delta_link__": payload.get("@odata.deltaLink")}
         break
+
+
+def iter_children(token, drive_id, item_id):
+    """Paginated listing of a folder's children on any drive.
+
+    Needed for shared folders (remoteItem shortcuts): delta on /me/drive only
+    returns the shortcut stub, so their contents must be walked directly on
+    the owner's drive.
+    """
+    url = (
+        f"{GRAPH}/drives/{drive_id}/items/{item_id}/children"
+        "?$top=200&$select=id,name,size,lastModifiedDateTime,webUrl,file,folder,parentReference"
+    )
+    while url:
+        payload = graph_get(url, token)
+        for item in payload.get("value", []):
+            yield item
+        url = payload.get("@odata.nextLink")
