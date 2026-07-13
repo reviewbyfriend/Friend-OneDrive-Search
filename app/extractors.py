@@ -1,45 +1,47 @@
-import csv
-import io
-
+import csv,io,os,subprocess,tempfile
+from pathlib import Path
+import pytesseract
+from PIL import Image
 from docx import Document
 from openpyxl import load_workbook
+from pdf2image import convert_from_bytes
 from pypdf import PdfReader
-
-SUPPORTED_CONTENT = {".docx", ".xlsx", ".pdf", ".txt", ".csv"}
-
-def extract_text(data: bytes, extension: str) -> str:
-    extension = extension.lower()
-
-    if extension == ".docx":
-        doc = Document(io.BytesIO(data))
-        parts = [p.text for p in doc.paragraphs if p.text.strip()]
-        for table in doc.tables:
-            for row in table.rows:
-                parts.append(" | ".join(cell.text for cell in row.cells))
-        return "\n".join(parts)
-
-    if extension == ".xlsx":
-        wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
-        parts = []
-        for ws in wb.worksheets:
-            parts.append(f"[ชีต: {ws.title}]")
-            for row in ws.iter_rows(values_only=True):
-                values = [str(v) for v in row if v is not None]
-                if values:
-                    parts.append(" | ".join(values))
-        return "\n".join(parts)
-
-    if extension == ".pdf":
-        reader = PdfReader(io.BytesIO(data))
-        return "\n".join((page.extract_text() or "") for page in reader.pages)
-
-    if extension == ".txt":
-        return data.decode("utf-8", errors="replace")
-
-    if extension == ".csv":
-        text = data.decode("utf-8-sig", errors="replace")
-        return "\n".join(
-            " | ".join(row) for row in csv.reader(io.StringIO(text))
-        )
-
-    raise ValueError(f"Unsupported content extension: {extension}")
+DIRECT={'.docx','.xlsx','.pdf','.txt','.csv'}; LEGACY={'.doc','.xls'}
+IMAGES={x.strip().lower() for x in os.getenv('OCR_IMAGE_EXTENSIONS','.jpg,.jpeg,.png,.tif,.tiff,.bmp,.webp').split(',') if x.strip()}
+CONTENT_EXTENSIONS=DIRECT|LEGACY|IMAGES
+OCR=os.getenv('ENABLE_OCR','true').lower() in {'1','true','yes','on'}; LANG=os.getenv('OCR_LANG','tha+eng'); MAXP=max(1,int(os.getenv('OCR_MAX_PAGES','20')))
+def docx(data):
+ d=Document(io.BytesIO(data)); p=[x.text for x in d.paragraphs if x.text.strip()]
+ for t in d.tables:
+  for r in t.rows:p.append(' | '.join(c.text for c in r.cells))
+ return '\n'.join(p)
+def xlsx(data):
+ w=load_workbook(io.BytesIO(data),read_only=True,data_only=True); p=[]
+ for s in w.worksheets:
+  p.append(f'[ชีต: {s.title}]')
+  for r in s.iter_rows(values_only=True):
+   v=[str(x) for x in r if x is not None]
+   if v:p.append(' | '.join(v))
+ return '\n'.join(p)
+def legacy(data,ext):
+ with tempfile.TemporaryDirectory() as td:
+  td=Path(td); src=td/f'source{ext}'; src.write_bytes(data); fmt='docx' if ext=='.doc' else 'xlsx'
+  r=subprocess.run(['libreoffice','--headless','--convert-to',fmt,'--outdir',str(td),str(src)],capture_output=True,timeout=120)
+  if r.returncode!=0:raise RuntimeError(r.stderr.decode(errors='replace')[:500] or 'LibreOffice conversion failed')
+  matches=list(td.glob(f'*.{fmt}'))
+  if not matches:raise RuntimeError('Converted file was not created')
+  return docx(matches[0].read_bytes()) if fmt=='docx' else xlsx(matches[0].read_bytes())
+def extract_text(data,ext):
+ ext=ext.lower()
+ if ext=='.docx':return docx(data)
+ if ext=='.xlsx':return xlsx(data)
+ if ext=='.pdf':
+  txt='\n'.join((p.extract_text() or '') for p in PdfReader(io.BytesIO(data)).pages).strip()
+  if txt:return txt
+  if not OCR:return ''
+  return '\n'.join(pytesseract.image_to_string(im,lang=LANG) for im in convert_from_bytes(data,dpi=180,first_page=1,last_page=MAXP))
+ if ext=='.txt':return data.decode('utf-8',errors='replace')
+ if ext=='.csv':return '\n'.join(' | '.join(r) for r in csv.reader(io.StringIO(data.decode('utf-8-sig',errors='replace'))))
+ if ext in LEGACY:return legacy(data,ext)
+ if ext in IMAGES:return pytesseract.image_to_string(Image.open(io.BytesIO(data)),lang=LANG) if OCR else ''
+ raise ValueError(f'Unsupported content extension: {ext}')

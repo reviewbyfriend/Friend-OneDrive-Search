@@ -15,7 +15,8 @@ from .db import (
     search_files,
     set_state,
     stats,
-    sync_state
+    sync_state,
+    list_problem_files
 )
 from .graph import (
     configured,
@@ -188,6 +189,10 @@ def full_rescan(background_tasks: BackgroundTasks):
         "/?message=rescan_started",
         status_code=303
     )
+
+@app.get("/problems", response_class=HTMLResponse)
+def problems(request: Request):
+    return templates.TemplateResponse("problems.html", {"request": request, "files": list_problem_files(), "stats": stats()})
 
 @app.get("/sync-status")
 def sync_status():
