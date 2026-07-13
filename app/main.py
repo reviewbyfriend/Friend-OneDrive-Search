@@ -96,10 +96,7 @@ async def periodic_sync_loop():
         except Exception:
             pass
 
-        state = sync_state()
-        pending = stats().get("pending", 0)
-        unfinished = bool(get_state("scan_cursor")) or pending > 0
-        await asyncio.sleep(30 if unfinished else AUTO_SYNC_MINUTES * 60)
+        await asyncio.sleep(AUTO_SYNC_MINUTES * 60)
 
 @app.on_event("startup")
 async def startup():
@@ -120,7 +117,9 @@ def home(request: Request, q: str = ""):
         "sync": sync_state(),
         "auto_sync_minutes": AUTO_SYNC_MINUTES,
         "ms_configured": configured(),
-        "connected": connected
+        "connected": connected,
+        "connected_account": get_state("connected_account"),
+        "main_drive_name": get_state("main_drive_name")
     })
 
 @app.get("/login")

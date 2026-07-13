@@ -63,6 +63,7 @@ mark{background:#fff1a8}
 </b>
 
 <p class="meta">
+บัญชีที่เชื่อม: <b>{{ connected_account or "กำลังตรวจสอบ" }}</b> · {{ main_drive_name or "OneDrive" }}<br>
 ตรวจอัตโนมัติทุก {{ auto_sync_minutes }} นาที ·
 อัปเดตล่าสุด <span id="last-completed">{{ sync.last_completed or "ยังไม่เคย" }}</span>
 </p>
@@ -80,7 +81,7 @@ mark{background:#fff1a8}
 ไฟล์ทั้งหมด {{ stats.total }} ·
 ค้นเนื้อหาได้ {{ stats.content_indexed }} ·
 ค้นชื่อ/โฟลเดอร์ได้ {{ stats.metadata_only }} ·
-รออ่านเนื้อหา {{ stats.pending }} ·
+รออ่านเนื้อหา {{ stats.pending_content }} ·
 ผิดพลาด {{ stats.errors }}
 </p>
 <p><a class="btn secondary" href="/problems">ดูไฟล์ที่ยังอ่านข้อความไม่ได้</a></p>
@@ -171,7 +172,7 @@ async function refreshStatus(){
       `ไฟล์ทั้งหมด ${data.stats.total} · ` +
       `ค้นเนื้อหาได้ ${data.stats.content_indexed} · ` +
       `ค้นชื่อ/โฟลเดอร์ได้ ${data.stats.metadata_only} · ` +
-      `รออ่านเนื้อหา ${data.stats.pending} · ` +
+      `รออ่านเนื้อหา ${data.stats.pending_content} · ` +
       `ผิดพลาด ${data.stats.errors}`;
   }catch(error){}
 }
