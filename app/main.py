@@ -25,7 +25,8 @@ from .graph import (
     get_access_token,
     get_auth_url,
     get_account,
-    microsoft_search
+    microsoft_search,
+    MicrosoftSearchError
 )
 from .sync_service import sync_drive
 
@@ -132,11 +133,19 @@ def home(request: Request, q: str = ""):
             microsoft_total = live.get("total", len(microsoft_results))
             microsoft_provider = live.get("provider")
             microsoft_warning = live.get("warning")
+        except MicrosoftSearchError as exc:
+            microsoft_error = (
+                f"HTTP {exc.status_code} — {exc.body_text[:1200]}"
+                if exc.status_code
+                else str(exc)[:1200]
+            )
         except Exception as exc:
-            microsoft_error = str(exc)[:500]
+            microsoft_error = str(exc)[:1200]
 
-    # Merge live Microsoft results with our local OCR/content index.
-    # Prefer the live result when both point to the same file.
+    # Tag local results and merge (Microsoft first, then OCR index, dedupe).
+    for item in local_results:
+        if not item.get("source"):
+            item["source"] = "OCR Database"
     merged = []
     seen = set()
     for item in microsoft_results + local_results:
@@ -146,14 +155,14 @@ def home(request: Request, q: str = ""):
         if key in seen:
             continue
         seen.add(key)
-        if not item.get("source"):
-            item["source"] = "ดัชนี OCR/ไฟล์ที่เคยอ่าน"
         merged.append(item)
 
     return templates.TemplateResponse("index.html", {
         "request": request,
         "q": q,
         "results": merged,
+        "microsoft_results": microsoft_results,
+        "local_results": local_results,
         "microsoft_count": len(microsoft_results),
         "microsoft_total": microsoft_total,
         "local_count": len(local_results),

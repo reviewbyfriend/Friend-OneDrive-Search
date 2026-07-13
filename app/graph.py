@@ -3,7 +3,6 @@ import os
 import re
 import time
 from pathlib import Path
-from urllib.parse import quote
 
 import msal
 import requests
@@ -188,84 +187,119 @@ def _resource_to_result(resource, hit=None):
     }
 
 
-def microsoft_search(token, query, *, page_size=50, max_results=200):
-    """Search Microsoft 365's existing index without crawling every file.
+class MicrosoftSearchError(RuntimeError):
+    """Raised when POST /search/query fails. Carries full Microsoft error detail."""
 
-    Uses POST /search/query first. If that endpoint is unavailable for the
-    connected account, falls back to the OneDrive driveItem search endpoint.
+    def __init__(self, status_code, body_text, message=None):
+        self.status_code = status_code
+        self.body_text = body_text or ""
+        super().__init__(
+            message
+            or f"Microsoft Graph Search API error {status_code}: {self.body_text[:800]}"
+        )
+
+
+def microsoft_search(token, query, *, page_size=50, max_results=200):
+    """Search via Microsoft Graph Search API (POST /v1.0/search/query).
+
+    - Sends the exact documented schema: requests[].entityTypes/query/from/size
+    - Uses requests.post(..., json=payload) with Bearer token
+    - Logs status_code + response.text on failure
+    - NO silent fallback: raises MicrosoftSearchError with full detail so the
+      UI can show the real Microsoft error for analysis.
+    - Pagination via from/size until moreResultsAvailable is false.
     """
     query = (query or "").strip()
     if not query:
         return {"results": [], "total": 0, "provider": "none"}
 
+    page_size = max(1, min(int(page_size), 200))
     results = []
     total = 0
-    try:
-        for offset in range(0, max_results, page_size):
-            body = {
-                "requests": [
-                    {
-                        "entityTypes": ["driveItem"],
-                        "query": {"queryString": query},
-                        "from": offset,
-                        "size": min(page_size, max_results - offset),
-                        "fields": [
-                            "id",
-                            "name",
-                            "webUrl",
-                            "size",
-                            "lastModifiedDateTime",
-                            "file",
-                            "folder",
-                            "parentReference",
-                        ],
-                    }
-                ]
-            }
-            payload = graph_post(f"{GRAPH}/search/query", token, body)
-            containers = []
-            for response in payload.get("value", []):
-                containers.extend(response.get("hitsContainers") or [])
-            page_hits = []
-            more = False
-            for container in containers:
-                total = max(total, int(container.get("total") or 0))
-                page_hits.extend(container.get("hits") or [])
-                more = more or bool(container.get("moreResultsAvailable"))
-            for hit in page_hits:
-                resource = hit.get("resource") or {}
-                if resource.get("folder") is not None:
-                    continue
-                results.append(_resource_to_result(resource, hit))
-            if not more or not page_hits:
-                break
-        return {"results": results[:max_results], "total": total or len(results), "provider": "Microsoft Search"}
-    except Exception as search_error:
-        # Personal Microsoft accounts can behave differently. This endpoint
-        # still searches the signed-in user's drive hierarchy and is a useful
-        # fallback for names and Microsoft-indexed content.
-        escaped = query.replace("'", "''")
-        url = (
-            f"{GRAPH}/me/drive/root/search(q='{quote(escaped)}')"
-            "?$top=200&$select=id,name,webUrl,size,lastModifiedDateTime,file,folder,parentReference"
-        )
-        try:
-            payload = graph_get(url, token)
-            for resource in payload.get("value", []):
-                if resource.get("folder") is not None:
-                    continue
-                results.append(_resource_to_result(resource))
-            return {
-                "results": results[:max_results],
-                "total": len(results),
-                "provider": "OneDrive Search",
-                "warning": f"Microsoft Search API ใช้ไม่ได้ จึงใช้ OneDrive Search แทน: {str(search_error)[:180]}",
-            }
-        except Exception as fallback_error:
-            raise RuntimeError(
-                "ค้นสดจาก Microsoft ไม่สำเร็จ: "
-                f"{str(search_error)[:180]} | fallback: {str(fallback_error)[:180]}"
+    offset = 0
+
+    while offset < max_results:
+        payload = {
+            "requests": [
+                {
+                    "entityTypes": ["driveItem"],
+                    "query": {"queryString": query},
+                    "from": offset,
+                    "size": min(page_size, max_results - offset),
+                }
+            ]
+        }
+
+        response = None
+        last_exc = None
+        for attempt in range(3):
+            try:
+                response = requests.post(
+                    f"{GRAPH}/search/query",
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                    timeout=60,
+                )
+            except (requests.Timeout, requests.ConnectionError) as exc:
+                last_exc = exc
+                time.sleep(min(2 ** attempt, 8))
+                continue
+
+            # Retry only throttling / transient server errors.
+            if response.status_code == 429 or response.status_code >= 500:
+                print(
+                    f"[microsoft_search] transient error status={response.status_code} "
+                    f"body={response.text[:500]}"
+                )
+                wait = int(response.headers.get("Retry-After", "0") or 0)
+                time.sleep(wait if wait > 0 else min(2 ** attempt, 8))
+                continue
+            break
+
+        if response is None:
+            raise MicrosoftSearchError(
+                0, str(last_exc), f"เชื่อมต่อ Microsoft Graph ไม่ได้: {last_exc}"
             )
+
+        if response.status_code != 200:
+            # Log full detail for analysis — never swallow or fall back silently.
+            print(
+                f"[microsoft_search] ERROR status_code={response.status_code} "
+                f"response.text={response.text}"
+            )
+            raise MicrosoftSearchError(response.status_code, response.text)
+
+        data = response.json()
+
+        containers = []
+        for resp in data.get("value", []):
+            containers.extend(resp.get("hitsContainers") or [])
+
+        page_hits = []
+        more = False
+        for container in containers:
+            total = max(total, int(container.get("total") or 0))
+            page_hits.extend(container.get("hits") or [])
+            more = more or bool(container.get("moreResultsAvailable"))
+
+        for hit in page_hits:
+            resource = hit.get("resource") or {}
+            if resource.get("folder") is not None:
+                continue
+            results.append(_resource_to_result(resource, hit))
+
+        if not more or not page_hits:
+            break
+        offset += len(page_hits)
+
+    return {
+        "results": results[:max_results],
+        "total": total or len(results),
+        "provider": "Microsoft Search",
+    }
 
 
 def iter_delta(token, delta_url=None):

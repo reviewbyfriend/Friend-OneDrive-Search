@@ -10,6 +10,7 @@ body{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;background:#f5f7f
 h1{margin:0 0 4px}.sub,.meta,.path{color:#69707d}.path{font-size:13px;word-break:break-all}.search{display:flex;gap:9px}.search input{flex:1;font-size:18px;padding:14px;border:1px solid #b9c0cc;border-radius:12px;min-width:0}
 button,.btn{background:#1769e0;color:#fff;border:0;border-radius:11px;padding:12px 17px;font-weight:750;text-decoration:none;display:inline-block;cursor:pointer}.secondary{background:#e8eef8;color:#174a91}.actions{display:flex;gap:8px;flex-wrap:wrap}.success{background:#eaf8ed}.notice{background:#fff7d8}.error{background:#ffe9e9;color:#8b1d1d}.warning{background:#fff5dc;color:#6b4b00}
 .result-head{display:flex;gap:10px;align-items:flex-start}.result-head h3{margin:0;flex:1}.snippet{line-height:1.7}.badge{display:inline-block;padding:5px 9px;border-radius:999px;font-size:12px;background:#eef1f5;margin:5px 5px 5px 0}.badge.ms{background:#e8f0fe;color:#174ea6}.badge.local{background:#eaf8ed;color:#176b36}mark{background:#fff1a8}.counts{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}.count{background:#f7f9fc;border-radius:12px;padding:12px}.count b{font-size:22px;display:block}.help{font-size:13px;color:#666;line-height:1.7}.help code{background:#eef1f5;padding:2px 5px;border-radius:5px}
+.tabs{display:flex;gap:8px;flex-wrap:wrap;margin:16px 0 4px}.tab{background:#e8eef8;color:#174a91;border:0;border-radius:11px;padding:10px 15px;font-weight:700;cursor:pointer;font-size:14px}.tab.active{background:#1769e0;color:#fff}.tabpane{display:none}.tabpane.active{display:block}
 @media(max-width:620px){.search{flex-direction:column}.search button{width:100%}.wrap{padding-top:16px}}
 </style>
 </head>
@@ -43,7 +44,7 @@ button,.btn{background:#1769e0;color:#fff;border:0;border-radius:11px;padding:12
 <input name="q" value="{{ q }}" placeholder="เช่น สำเริง, เลขคดี, วันเกิด, ชื่อจำเลย" autofocus>
 <button>ค้นหา</button>
 </form>
-<div class="help"><b>ค้นได้ทันที:</b> ชื่อไฟล์ โฟลเดอร์ และข้อความที่ Microsoft ทำดัชนีไว้ ส่วน PDF สแกน/รูปภาพจะเสริมจากฐาน OCR เดิมเมื่อมีข้อมูล</div>
+<div class="help"><b>ค้นได้ทันที ไม่ต้องรอ index:</b> ค้นสดจาก Microsoft Search ก่อน แล้วเสริมด้วย OCR Database (เก็บเฉพาะ PDF สแกน/รูปภาพที่ Microsoft อ่านเนื้อหาไม่ได้)</div>
 </div>
 
 {% if q %}
@@ -54,19 +55,50 @@ button,.btn{background:#1769e0;color:#fff;border:0;border-radius:11px;padding:12
 </div>
 {% if microsoft_provider %}<p class="meta">แหล่งค้นสด: {{ microsoft_provider }}</p>{% endif %}
 {% if microsoft_warning %}<div class="card warning">{{ microsoft_warning }}</div>{% endif %}
-{% if microsoft_error %}<div class="card error"><b>ค้นสดจาก Microsoft ไม่สำเร็จ</b><br>{{ microsoft_error }}<br><small>ยังแสดงผลจากฐาน OCR/ดัชนีเดิมด้านล่าง</small></div>{% endif %}
+{% if microsoft_error %}<div class="card error"><b>Microsoft Graph Search API ผิดพลาด</b><br><pre style="white-space:pre-wrap;word-break:break-all;font-size:12px;margin:8px 0 0">{{ microsoft_error }}</pre><small>ยังแสดงผลจาก OCR Database ด้านล่างได้ตามปกติ</small></div>{% endif %}
 
-<h2>ผลค้นหา “{{ q }}” — {{ results|length }} รายการ</h2>
-{% for r in results %}
+{% macro result_card(r) %}
 <div class="card">
 <div class="result-head"><h3>📄 {{ r.name }}</h3></div>
 <div class="path">{{ r.path or "" }}</div>
-{% if r.source == "Microsoft Search" or r.source == "OneDrive Search" %}<span class="badge ms">{{ r.source }}</span>{% else %}<span class="badge local">{{ r.source }}</span>{% endif %}
-{% if r.status == "content_indexed" %}<span class="badge">อ่านข้อความในไฟล์แล้ว</span>{% endif %}
+{% if r.source == "Microsoft Search" %}<span class="badge ms">{{ r.source }}</span>{% else %}<span class="badge local">{{ r.source }}</span>{% endif %}
+{% if r.status == "content_indexed" %}<span class="badge">อ่านข้อความในไฟล์แล้ว (OCR)</span>{% endif %}
 {% if r.snippet %}<p class="snippet">{{ r.snippet|safe }}</p>{% endif %}
 <div class="meta">แก้ไขล่าสุด {{ r.modified_at or "-" }} · {{ r.extension or "ไม่ทราบชนิด" }}</div>
 {% if r.web_url %}<p><a class="btn secondary" target="_blank" rel="noopener" href="{{ r.web_url }}">เปิดไฟล์ใน OneDrive</a></p>{% endif %}
 </div>
-{% else %}<div class="card">ยังไม่พบคำนี้ทั้งจาก Microsoft และฐาน OCR เดิม</div>{% endfor %}
+{% endmacro %}
+
+<div class="tabs">
+<button class="tab active" data-pane="pane-all">รวมทั้งหมด ({{ results|length }})</button>
+<button class="tab" data-pane="pane-ms">Microsoft Search ({{ microsoft_results|length }})</button>
+<button class="tab" data-pane="pane-ocr">OCR Database ({{ local_results|length }})</button>
+</div>
+
+<div id="pane-all" class="tabpane active">
+<h2>ผลรวมไม่ซ้ำ “{{ q }}” — {{ results|length }} รายการ</h2>
+{% for r in results %}{{ result_card(r) }}{% else %}<div class="card">ยังไม่พบคำนี้ทั้งจาก Microsoft และ OCR Database</div>{% endfor %}
+</div>
+
+<div id="pane-ms" class="tabpane">
+<h2>ผลจาก Microsoft Search — {{ microsoft_results|length }} รายการ{% if microsoft_total > microsoft_results|length %} (ทั้งหมดประมาณ {{ microsoft_total }}){% endif %}</h2>
+{% for r in microsoft_results %}{{ result_card(r) }}{% else %}<div class="card">Microsoft Search ไม่พบคำนี้{% if microsoft_error %} (เกิด error — ดูรายละเอียดด้านบน){% endif %}</div>{% endfor %}
+</div>
+
+<div id="pane-ocr" class="tabpane">
+<h2>ผลจาก OCR Database — {{ local_results|length }} รายการ</h2>
+{% for r in local_results %}{{ result_card(r) }}{% else %}<div class="card">OCR Database ไม่พบคำนี้ (ฐานนี้เก็บเฉพาะ PDF สแกน/รูปภาพที่ Microsoft อ่านไม่ได้)</div>{% endfor %}
+</div>
+
+<script>
+document.querySelectorAll('.tab').forEach(function(btn){
+  btn.addEventListener('click',function(){
+    document.querySelectorAll('.tab').forEach(function(b){b.classList.remove('active')});
+    document.querySelectorAll('.tabpane').forEach(function(p){p.classList.remove('active')});
+    btn.classList.add('active');
+    document.getElementById(btn.dataset.pane).classList.add('active');
+  });
+});
+</script>
 {% endif %}
 </div></body></html>
