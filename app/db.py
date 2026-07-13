@@ -36,8 +36,6 @@ def init_db():
         conn.executescript("""
         CREATE TABLE IF NOT EXISTS files (
             item_id TEXT PRIMARY KEY,
-            drive_id TEXT DEFAULT '',
-            source TEXT DEFAULT 'main',
             name TEXT NOT NULL,
             path TEXT,
             web_url TEXT,
@@ -78,11 +76,9 @@ def init_db():
             for row in conn.execute("PRAGMA table_info(files)").fetchall()
         }
         if "search_text_norm" not in columns:
-            conn.execute("ALTER TABLE files ADD COLUMN search_text_norm TEXT DEFAULT ''")
-        if "drive_id" not in columns:
-            conn.execute("ALTER TABLE files ADD COLUMN drive_id TEXT DEFAULT ''")
-        if "source" not in columns:
-            conn.execute("ALTER TABLE files ADD COLUMN source TEXT DEFAULT 'main'")
+            conn.execute(
+                "ALTER TABLE files ADD COLUMN search_text_norm TEXT DEFAULT ''"
+            )
 
         rows = conn.execute("""
             SELECT item_id,name,path,content
@@ -123,18 +119,16 @@ def upsert_file(meta, content="", status="metadata_only", error=None):
     with connect() as conn:
         conn.execute("""
         INSERT INTO files(
-            item_id,drive_id,source,name,path,web_url,mime_type,extension,
+            item_id,name,path,web_url,mime_type,extension,
             modified_at,size,content,search_text_norm,
             indexed_at,status,error
         )
         VALUES(
-            :item_id,:drive_id,:source,:name,:path,:web_url,:mime_type,:extension,
+            :item_id,:name,:path,:web_url,:mime_type,:extension,
             :modified_at,:size,:content,:search_text_norm,
             CURRENT_TIMESTAMP,:status,:error
         )
         ON CONFLICT(item_id) DO UPDATE SET
-            drive_id=excluded.drive_id,
-            source=excluded.source,
             name=excluded.name,
             path=excluded.path,
             web_url=excluded.web_url,
@@ -149,8 +143,6 @@ def upsert_file(meta, content="", status="metadata_only", error=None):
             error=excluded.error
         """, {
             **meta,
-            "drive_id": meta.get("drive_id", ""),
-            "source": meta.get("source", "main"),
             "content": content,
             "search_text_norm": normalized_blob,
             "status": status,
@@ -436,24 +428,6 @@ def suggestions(prefix, limit=10):
 
     return suggestions_out[:limit]
 
-def pending_files(limit=25):
-    with connect() as conn:
-        rows = conn.execute("""
-        SELECT item_id,drive_id,source,name,path,web_url,mime_type,extension,modified_at,size
-        FROM files
-        WHERE status='pending_content'
-        ORDER BY indexed_at ASC
-        LIMIT ?
-        """, (limit,)).fetchall()
-        return [dict(row) for row in rows]
-
-def mark_all_for_content_refresh():
-    with connect() as conn:
-        conn.execute("""
-        UPDATE files SET status='pending_content',error=NULL
-        WHERE extension IN ('.doc','.docx','.xls','.xlsx','.ppt','.pptx','.pdf','.txt','.csv','.rtf','.odt','.ods','.odp')
-        """)
-
 def stats():
     with connect() as conn:
         total = conn.execute("SELECT COUNT(*) c FROM files").fetchone()["c"]
@@ -462,9 +436,6 @@ def stats():
         ).fetchone()["c"]
         metadata = conn.execute(
             "SELECT COUNT(*) c FROM files WHERE status='metadata_only'"
-        ).fetchone()["c"]
-        pending = conn.execute(
-            "SELECT COUNT(*) c FROM files WHERE status='pending_content'"
         ).fetchone()["c"]
         errors = conn.execute(
             "SELECT COUNT(*) c FROM files WHERE status='error'"
@@ -477,7 +448,6 @@ def stats():
         "total": total,
         "content_indexed": content,
         "metadata_only": metadata,
-        "pending_content": pending,
         "errors": errors,
         "last_indexed": last_indexed
     }
@@ -487,7 +457,7 @@ def list_problem_files(limit=500):
         rows = conn.execute("""
         SELECT item_id,name,path,web_url,extension,status,error,modified_at
         FROM files
-        WHERE status IN ('error','metadata_only','pending_content')
+        WHERE status IN ('error','metadata_only')
         ORDER BY
             CASE WHEN status='error' THEN 0 ELSE 1 END,
             modified_at DESC

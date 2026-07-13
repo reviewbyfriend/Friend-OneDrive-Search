@@ -12,7 +12,6 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from .db import (
     init_db,
-    get_state,
     search_files,
     set_state,
     stats,
@@ -24,7 +23,9 @@ from .graph import (
     configured,
     exchange_code,
     get_access_token,
-    get_auth_url
+    get_auth_url,
+    get_account,
+    microsoft_search
 )
 from .sync_service import sync_drive
 
@@ -32,6 +33,7 @@ BASE_DIR = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 AUTO_SYNC_MINUTES = max(1, int(os.getenv("AUTO_SYNC_MINUTES", "10")))
+ENABLE_BACKGROUND_INDEX = os.getenv("ENABLE_BACKGROUND_INDEX", "false").lower() == "true"
 
 app = FastAPI(title="Friend OneDrive Search v1.0")
 
@@ -102,24 +104,69 @@ async def periodic_sync_loop():
 async def startup():
     init_db()
     set_state("sync_running", "0")
-    asyncio.create_task(periodic_sync_loop())
+    if ENABLE_BACKGROUND_INDEX:
+        asyncio.create_task(periodic_sync_loop())
 
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request, q: str = ""):
-    connected = bool(get_access_token())
-    results = search_files(q) if q else []
+    token = get_access_token()
+    connected = bool(token)
+    local_results = search_files(q, limit=100) if q else []
+    microsoft_results = []
+    microsoft_total = 0
+    microsoft_provider = None
+    microsoft_warning = None
+    microsoft_error = None
+    account = None
+
+    if connected:
+        try:
+            account = get_account(token)
+        except Exception:
+            account = None
+
+    if q and connected:
+        try:
+            live = microsoft_search(token, q, page_size=50, max_results=200)
+            microsoft_results = live.get("results", [])
+            microsoft_total = live.get("total", len(microsoft_results))
+            microsoft_provider = live.get("provider")
+            microsoft_warning = live.get("warning")
+        except Exception as exc:
+            microsoft_error = str(exc)[:500]
+
+    # Merge live Microsoft results with our local OCR/content index.
+    # Prefer the live result when both point to the same file.
+    merged = []
+    seen = set()
+    for item in microsoft_results + local_results:
+        key = (item.get("web_url") or item.get("item_id") or "").casefold()
+        if not key:
+            key = f"{item.get('name','')}|{item.get('path','')}".casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        if not item.get("source"):
+            item["source"] = "ดัชนี OCR/ไฟล์ที่เคยอ่าน"
+        merged.append(item)
 
     return templates.TemplateResponse("index.html", {
         "request": request,
         "q": q,
-        "results": results,
+        "results": merged,
+        "microsoft_count": len(microsoft_results),
+        "microsoft_total": microsoft_total,
+        "local_count": len(local_results),
+        "microsoft_provider": microsoft_provider,
+        "microsoft_warning": microsoft_warning,
+        "microsoft_error": microsoft_error,
         "stats": stats(),
         "sync": sync_state(),
         "auto_sync_minutes": AUTO_SYNC_MINUTES,
         "ms_configured": configured(),
         "connected": connected,
-        "connected_account": get_state("connected_account"),
-        "main_drive_name": get_state("main_drive_name")
+        "account": account,
+        "background_index_enabled": ENABLE_BACKGROUND_INDEX,
     })
 
 @app.get("/login")
@@ -166,7 +213,8 @@ def auth_callback(
             status_code=400
         )
 
-    background_tasks.add_task(run_sync, False)
+    if ENABLE_BACKGROUND_INDEX:
+        background_tasks.add_task(run_sync, False)
     return RedirectResponse(
         "/?message=connected",
         status_code=303

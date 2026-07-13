@@ -6,238 +6,67 @@
 <title>Friend OneDrive Search</title>
 <style>
 body{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;background:#f5f7fb;margin:0;color:#202124}
-.wrap{max-width:920px;margin:auto;padding:24px 16px 60px}
-.card{background:white;border:1px solid #e3e6ee;border-radius:16px;padding:16px;margin:12px 0;box-shadow:0 3px 14px rgba(0,0,0,.04)}
-h1{margin-bottom:4px}.sub{color:#666}
-.search{display:flex;gap:8px}
-.search input{flex:1;font-size:17px;padding:13px;border:1px solid #bbb;border-radius:11px}
-button,.btn{background:#1769e0;color:white;border:0;border-radius:11px;padding:11px 15px;font-weight:700;text-decoration:none;display:inline-block;cursor:pointer}
-.secondary{background:#e8eef8;color:#174a91}
-.actions{display:flex;gap:8px;flex-wrap:wrap}
-.notice{background:#fff7d8}.success{background:#eaf8ed}.error{background:#ffe9e9;color:#8b1d1d}
-.path{font-size:13px;color:#666;word-break:break-all}
-.snippet{line-height:1.6}
-mark{background:#fff1a8}
-.meta{font-size:12px;color:#777}
-.badge{display:inline-block;padding:4px 8px;border-radius:999px;font-size:12px;background:#eef1f5;margin:4px 4px 4px 0}
-.search-wrap{position:relative;flex:1}
-.search-wrap input{width:100%;box-sizing:border-box}
-.suggestions{position:absolute;left:0;right:0;top:100%;z-index:20;background:white;border:1px solid #d9dee8;border-radius:0 0 12px 12px;box-shadow:0 8px 20px rgba(0,0,0,.12);overflow:hidden;display:none}
-.suggestion{padding:10px 12px;cursor:pointer;border-bottom:1px solid #f0f1f4}
-.suggestion:hover{background:#f4f7fc}
-.search-help{font-size:13px;color:#666;line-height:1.7;margin-top:10px}
-.search-help code{background:#eef1f5;padding:2px 5px;border-radius:5px}
-@media(max-width:600px){.search{flex-direction:column}.suggestions{position:static}}
+.wrap{max-width:980px;margin:auto;padding:24px 16px 60px}.card{background:#fff;border:1px solid #e3e6ee;border-radius:18px;padding:18px;margin:14px 0;box-shadow:0 3px 14px rgba(0,0,0,.04)}
+h1{margin:0 0 4px}.sub,.meta,.path{color:#69707d}.path{font-size:13px;word-break:break-all}.search{display:flex;gap:9px}.search input{flex:1;font-size:18px;padding:14px;border:1px solid #b9c0cc;border-radius:12px;min-width:0}
+button,.btn{background:#1769e0;color:#fff;border:0;border-radius:11px;padding:12px 17px;font-weight:750;text-decoration:none;display:inline-block;cursor:pointer}.secondary{background:#e8eef8;color:#174a91}.actions{display:flex;gap:8px;flex-wrap:wrap}.success{background:#eaf8ed}.notice{background:#fff7d8}.error{background:#ffe9e9;color:#8b1d1d}.warning{background:#fff5dc;color:#6b4b00}
+.result-head{display:flex;gap:10px;align-items:flex-start}.result-head h3{margin:0;flex:1}.snippet{line-height:1.7}.badge{display:inline-block;padding:5px 9px;border-radius:999px;font-size:12px;background:#eef1f5;margin:5px 5px 5px 0}.badge.ms{background:#e8f0fe;color:#174ea6}.badge.local{background:#eaf8ed;color:#176b36}mark{background:#fff1a8}.counts{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}.count{background:#f7f9fc;border-radius:12px;padding:12px}.count b{font-size:22px;display:block}.help{font-size:13px;color:#666;line-height:1.7}.help code{background:#eef1f5;padding:2px 5px;border-radius:5px}
+@media(max-width:620px){.search{flex-direction:column}.search button{width:100%}.wrap{padding-top:16px}}
 </style>
 </head>
-<body>
-<div class="wrap">
+<body><div class="wrap">
 <h1>🔎 Friend OneDrive Search</h1>
-<div class="sub">เชื่อมครั้งเดียว ค้นทุกไฟล์ และเปิดต้นฉบับใน OneDrive ได้</div>
+<div class="sub">ค้นสดจาก Microsoft ก่อน แล้วเสริมด้วยดัชนี OCR ของเรา</div>
 
-{% if request.query_params.get("error") == "missing_config" %}
-<div class="card error">ยังไม่ได้ตั้งค่า Microsoft ใน Railway Variables</div>
-{% endif %}
-
-{% if request.query_params.get("message") == "connected" %}
-<div class="card success">เชื่อม OneDrive สำเร็จ ระบบเริ่มทำดัชนีให้อัตโนมัติแล้ว</div>
-{% elif request.query_params.get("message") == "sync_started" %}
-<div class="card notice">กำลังตรวจเฉพาะไฟล์ที่เพิ่มหรือแก้ไข</div>
-{% elif request.query_params.get("message") == "rescan_started" %}
-<div class="card notice">กำลังสแกนใหม่ทั้งหมด</div>
-{% endif %}
+{% if request.query_params.get("error") == "missing_config" %}<div class="card error">ยังไม่ได้ตั้งค่า Microsoft ใน Railway Variables</div>{% endif %}
+{% if request.query_params.get("message") == "connected" %}<div class="card success">เชื่อม Microsoft สำเร็จแล้ว ตอนนี้ค้นสดได้ทันที ไม่ต้องรอสแกนไฟล์ทั้งหมด</div>{% endif %}
 
 <div class="card">
 {% if not ms_configured %}
 <b>ยังไม่ได้ตั้งค่า Microsoft</b>
 {% elif not connected %}
-<b>ยังไม่ได้เชื่อม OneDrive</b>
-<p><a class="btn" href="/login">เชื่อมบัญชี Microsoft</a></p>
+<b>ต้องเชื่อมบัญชีใหม่หนึ่งครั้ง</b><p class="meta">เวอร์ชันนี้ใช้สิทธิ์ Files.Read.All และ Sites.Read.All เพื่อค้น OneDrive/SharePoint</p><a class="btn" href="/login">เชื่อมบัญชี Microsoft</a>
 {% else %}
-<b id="sync-label">
-{% if sync.sync_running %}
-กำลังตรวจไฟล์ใน OneDrive…
+<b>เชื่อม Microsoft แล้ว</b>
+{% if account %}<div class="meta">บัญชี: {{ account.email or account.name }}</div>{% endif %}
+<p class="meta">การค้นหาหลักเป็นแบบสด จึงไม่จำเป็นต้องให้ยอดไฟล์ในฐานข้อมูลครบ 30,000 ก่อน</p>
+{% if background_index_enabled %}
+<div class="actions"><form method="post" action="/sync"><button class="secondary">อัปเดตดัชนี OCR</button></form></div>
+<p class="meta">ดัชนีเสริม: {{ stats.total }} ไฟล์ · อ่านเนื้อหาแล้ว {{ stats.content_indexed }} · อ่านไม่ได้/ชื่อเท่านั้น {{ stats.metadata_only }} · ผิดพลาด {{ stats.errors }}</p>
 {% else %}
-เชื่อม OneDrive แล้ว
+<span class="badge local">ดัชนีเดิมใช้เป็นผลสำรอง</span>
 {% endif %}
-</b>
-
-<p class="meta">
-บัญชีที่เชื่อม: <b>{{ connected_account or "กำลังตรวจสอบ" }}</b> · {{ main_drive_name or "OneDrive" }}<br>
-ตรวจอัตโนมัติทุก {{ auto_sync_minutes }} นาที ·
-อัปเดตล่าสุด <span id="last-completed">{{ sync.last_completed or "ยังไม่เคย" }}</span>
-</p>
-
-<div class="actions">
-<form method="post" action="/sync">
-<button>ตรวจไฟล์ตอนนี้</button>
-</form>
-<form method="post" action="/rescan">
-<button class="secondary">สแกนใหม่ทั้งหมด</button>
-</form>
-</div>
-
-<p class="meta" id="stats">
-ไฟล์ทั้งหมด {{ stats.total }} ·
-ค้นเนื้อหาได้ {{ stats.content_indexed }} ·
-ค้นชื่อ/โฟลเดอร์ได้ {{ stats.metadata_only }} ·
-รออ่านเนื้อหา {{ stats.pending_content }} ·
-ผิดพลาด {{ stats.errors }}
-</p>
-<p><a class="btn secondary" href="/problems">ดูไฟล์ที่ยังอ่านข้อความไม่ได้</a></p>
 {% endif %}
 </div>
 
 <div class="card">
-<form class="search" method="get" action="/" autocomplete="off">
-<div class="search-wrap">
-<input
-  id="search-input"
-  name="q"
-  value="{{ q }}"
-  placeholder="เช่น สำเริง วันเกิด"
->
-<div id="suggestions" class="suggestions"></div>
-</div>
+<form class="search" method="get" action="/">
+<input name="q" value="{{ q }}" placeholder="เช่น สำเริง, เลขคดี, วันเกิด, ชื่อจำเลย" autofocus>
 <button>ค้นหา</button>
 </form>
-<div class="search-help">
-<b>ค้นหลายคำได้:</b>
-<code>สำเริง วันเกิด</code> = ต้องมีทั้งสองคำ,
-<code>สำเริง | สมชาย</code> = มีคำใดคำหนึ่ง,
-<code>"นายสำเริง ใจดี"</code> = วลีตรงตัว,
-<code>สำเริง -เชียงใหม่</code> = ตัดไฟล์ที่มีเชียงใหม่,
-<code>สำเริ*</code> = คำขึ้นต้น/ใกล้เคียง
-</div>
+<div class="help"><b>ค้นได้ทันที:</b> ชื่อไฟล์ โฟลเดอร์ และข้อความที่ Microsoft ทำดัชนีไว้ ส่วน PDF สแกน/รูปภาพจะเสริมจากฐาน OCR เดิมเมื่อมีข้อมูล</div>
 </div>
 
 {% if q %}
-<h2>ผลค้นหา “{{ q }}” — {{ results|length }} รายการ</h2>
+<div class="counts">
+<div class="count"><span>ผลจาก Microsoft</span><b>{{ microsoft_count }}</b>{% if microsoft_total > microsoft_count %}<small>จากทั้งหมดประมาณ {{ microsoft_total }}</small>{% endif %}</div>
+<div class="count"><span>ผลจากดัชนี OCR/เดิม</span><b>{{ local_count }}</b></div>
+<div class="count"><span>ผลรวมไม่ซ้ำ</span><b>{{ results|length }}</b></div>
+</div>
+{% if microsoft_provider %}<p class="meta">แหล่งค้นสด: {{ microsoft_provider }}</p>{% endif %}
+{% if microsoft_warning %}<div class="card warning">{{ microsoft_warning }}</div>{% endif %}
+{% if microsoft_error %}<div class="card error"><b>ค้นสดจาก Microsoft ไม่สำเร็จ</b><br>{{ microsoft_error }}<br><small>ยังแสดงผลจากฐาน OCR/ดัชนีเดิมด้านล่าง</small></div>{% endif %}
 
+<h2>ผลค้นหา “{{ q }}” — {{ results|length }} รายการ</h2>
 {% for r in results %}
 <div class="card">
-<h3>📄 {{ r.name }}</h3>
-<div class="path">{{ r.path }}</div>
-
-{% if r.status == "content_indexed" %}
-<span class="badge">ค้นในเนื้อหาได้</span>
-{% elif r.status == "metadata_only" %}
-<span class="badge">ค้นได้จากชื่อไฟล์/โฟลเดอร์</span>
-{% else %}
-<span class="badge">อ่านเนื้อหาไม่สำเร็จ</span>
-{% endif %}
-
-{% if r.snippet %}
-<p class="snippet">{{ r.snippet|safe }}</p>
-{% endif %}
-
-<div class="meta">
-แก้ไขล่าสุด {{ r.modified_at or "-" }} ·
-{{ r.extension or "ไม่มีนามสกุล" }}
+<div class="result-head"><h3>📄 {{ r.name }}</h3></div>
+<div class="path">{{ r.path or "" }}</div>
+{% if r.source == "Microsoft Search" or r.source == "OneDrive Search" %}<span class="badge ms">{{ r.source }}</span>{% else %}<span class="badge local">{{ r.source }}</span>{% endif %}
+{% if r.status == "content_indexed" %}<span class="badge">อ่านข้อความในไฟล์แล้ว</span>{% endif %}
+{% if r.snippet %}<p class="snippet">{{ r.snippet|safe }}</p>{% endif %}
+<div class="meta">แก้ไขล่าสุด {{ r.modified_at or "-" }} · {{ r.extension or "ไม่ทราบชนิด" }}</div>
+{% if r.web_url %}<p><a class="btn secondary" target="_blank" rel="noopener" href="{{ r.web_url }}">เปิดไฟล์ใน OneDrive</a></p>{% endif %}
 </div>
-
-{% if r.web_url %}
-<p>
-<a
-  class="btn secondary"
-  target="_blank"
-  rel="noopener"
-  href="{{ r.web_url }}"
->เปิดไฟล์ใน OneDrive</a>
-</p>
+{% else %}<div class="card">ยังไม่พบคำนี้ทั้งจาก Microsoft และฐาน OCR เดิม</div>{% endfor %}
 {% endif %}
-</div>
-{% else %}
-<div class="card">ยังไม่พบคำนี้</div>
-{% endfor %}
-{% endif %}
-</div>
-
-{% if connected %}
-<script>
-async function refreshStatus(){
-  try{
-    const response = await fetch('/sync-status', {cache: 'no-store'});
-    const data = await response.json();
-
-    document.getElementById('sync-label').textContent =
-      data.sync.sync_running
-        ? 'กำลังตรวจไฟล์ใน OneDrive…'
-        : 'เชื่อม OneDrive แล้ว';
-
-    document.getElementById('last-completed').textContent =
-      data.sync.last_completed || 'ยังไม่เคย';
-
-    document.getElementById('stats').textContent =
-      `ไฟล์ทั้งหมด ${data.stats.total} · ` +
-      `ค้นเนื้อหาได้ ${data.stats.content_indexed} · ` +
-      `ค้นชื่อ/โฟลเดอร์ได้ ${data.stats.metadata_only} · ` +
-      `รออ่านเนื้อหา ${data.stats.pending_content} · ` +
-      `ผิดพลาด ${data.stats.errors}`;
-  }catch(error){}
-}
-
-setInterval(refreshStatus, 5000);
-</script>
-{% endif %}
-
-<script>
-(function(){
-  const input = document.getElementById('search-input');
-  const box = document.getElementById('suggestions');
-  if(!input || !box) return;
-
-  let timer = null;
-  let controller = null;
-
-  function closeBox(){
-    box.style.display = 'none';
-    box.innerHTML = '';
-  }
-
-  input.addEventListener('input', function(){
-    clearTimeout(timer);
-    const q = input.value.trim();
-    if(!q){ closeBox(); return; }
-
-    timer = setTimeout(async function(){
-      try{
-        if(controller) controller.abort();
-        controller = new AbortController();
-        const response = await fetch('/suggest?q=' + encodeURIComponent(q), {
-          cache: 'no-store',
-          signal: controller.signal
-        });
-        const data = await response.json();
-        const items = data.suggestions || [];
-        box.innerHTML = '';
-
-        if(!items.length){ closeBox(); return; }
-
-        items.forEach(function(value){
-          const div = document.createElement('div');
-          div.className = 'suggestion';
-          div.textContent = value;
-          div.addEventListener('mousedown', function(event){
-            event.preventDefault();
-            input.value = value;
-            closeBox();
-            input.focus();
-          });
-          box.appendChild(div);
-        });
-        box.style.display = 'block';
-      }catch(error){}
-    }, 220);
-  });
-
-  document.addEventListener('click', function(event){
-    if(!box.contains(event.target) && event.target !== input){
-      closeBox();
-    }
-  });
-})();
-</script>
-
-</body>
-</html>
+</div></body></html>

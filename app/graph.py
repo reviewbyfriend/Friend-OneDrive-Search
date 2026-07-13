@@ -1,7 +1,9 @@
+import html
 import os
+import re
 import time
 from pathlib import Path
-from urllib.parse import urlencode
+from urllib.parse import quote
 
 import msal
 import requests
@@ -22,8 +24,8 @@ CLIENT_SECRET = os.getenv("MICROSOFT_CLIENT_SECRET", "").strip()
 TENANT = os.getenv("MICROSOFT_TENANT", "consumers").strip() or "consumers"
 AUTHORITY = f"https://login.microsoftonline.com/{TENANT}"
 
-# Files.Read.All is required for shared items. Sites.Read.All covers files that
-# are actually stored in SharePoint/Teams document libraries.
+# These delegated scopes cover the signed-in user's OneDrive and SharePoint
+# content. MSAL handles the reserved offline_access scope automatically.
 SCOPES = ["User.Read", "Files.Read.All", "Sites.Read.All"]
 
 
@@ -74,7 +76,9 @@ def exchange_code(code, redirect_uri):
     cache = _load_cache()
     app = _build_app(cache)
     result = app.acquire_token_by_authorization_code(
-        code, scopes=SCOPES, redirect_uri=redirect_uri
+        code,
+        scopes=SCOPES,
+        redirect_uri=redirect_uri,
     )
     _save_cache(cache)
     return result
@@ -93,62 +97,182 @@ def get_access_token():
     return result.get("access_token") if result else None
 
 
-def _request(method, url, token, *, timeout=90, max_attempts=7):
-    headers = {"Authorization": f"Bearer {token}"}
+def _request(method, url, token, *, json_body=None, timeout=90, retries=3):
     last_error = None
-    for attempt in range(max_attempts):
+    for attempt in range(retries):
         try:
-            response = requests.request(method, url, headers=headers, timeout=timeout)
-            if response.status_code in (429, 500, 502, 503, 504):
-                retry_after = response.headers.get("Retry-After")
-                delay = int(retry_after) if retry_after and retry_after.isdigit() else min(2 ** attempt, 30)
-                time.sleep(delay)
+            response = requests.request(
+                method,
+                url,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                },
+                json=json_body,
+                timeout=timeout,
+            )
+            if response.status_code == 429 or response.status_code >= 500:
+                wait = int(response.headers.get("Retry-After", "0") or 0)
+                time.sleep(wait if wait > 0 else min(2 ** attempt, 8))
+                last_error = requests.HTTPError(
+                    f"Microsoft Graph {response.status_code}: {response.text[:300]}"
+                )
                 continue
             response.raise_for_status()
             return response
-        except requests.RequestException as exc:
+        except (requests.Timeout, requests.ConnectionError, requests.HTTPError) as exc:
             last_error = exc
-            if attempt == max_attempts - 1:
-                raise
-            time.sleep(min(2 ** attempt, 30))
+            if attempt < retries - 1:
+                time.sleep(min(2 ** attempt, 8))
     raise last_error or RuntimeError("Microsoft Graph request failed")
 
 
 def graph_get(url, token):
-    return _request("GET", url, token, timeout=90).json()
+    return _request("GET", url, token).json()
 
 
-def iter_collection(url, token):
-    while url:
-        payload = graph_get(url, token)
-        for item in payload.get("value", []):
-            yield item
-        url = payload.get("@odata.nextLink")
+def graph_post(url, token, body):
+    return _request("POST", url, token, json_body=body).json()
 
 
-def get_me(token):
-    return graph_get(f"{GRAPH}/me?$select=displayName,mail,userPrincipalName", token)
+def get_account(token):
+    payload = graph_get(f"{GRAPH}/me?$select=displayName,mail,userPrincipalName", token)
+    return {
+        "name": payload.get("displayName") or "",
+        "email": payload.get("mail") or payload.get("userPrincipalName") or "",
+    }
 
 
-def get_main_drive(token):
-    return graph_get(f"{GRAPH}/me/drive?$select=id,name,driveType,webUrl,owner,quota", token)
+def download_item(item_id, token, drive_id=None):
+    if drive_id:
+        url = f"{GRAPH}/drives/{drive_id}/items/{item_id}/content"
+    else:
+        url = f"{GRAPH}/me/drive/items/{item_id}/content"
+    return _request("GET", url, token, timeout=180).content
 
 
-def download_item(drive_id, item_id, token):
-    return _request(
-        "GET",
-        f"{GRAPH}/drives/{drive_id}/items/{item_id}/content",
-        token,
-        timeout=180,
-    ).content
+def _clean_summary(summary):
+    """Keep Microsoft hit highlighting while escaping all other HTML."""
+    summary = summary or ""
+    summary = summary.replace("<c0>", "[[[MARK]]]").replace("</c0>", "[[[/MARK]]]")
+    summary = re.sub(r"<[^>]+>", " ", summary)
+    summary = html.escape(summary)
+    return (
+        summary.replace("[[[MARK]]]", "<mark>")
+        .replace("[[[/MARK]]]", "</mark>")
+        .strip()
+    )
+
+
+def _resource_to_result(resource, hit=None):
+    parent = resource.get("parentReference") or {}
+    drive_id = parent.get("driveId") or ""
+    item_id = resource.get("id") or (hit or {}).get("hitId") or ""
+    name = resource.get("name") or "ไม่ทราบชื่อไฟล์"
+    path = parent.get("path") or ""
+    file_info = resource.get("file") or {}
+    return {
+        "item_id": item_id,
+        "drive_id": drive_id,
+        "name": name,
+        "path": path,
+        "web_url": resource.get("webUrl") or "",
+        "mime_type": file_info.get("mimeType") or "",
+        "extension": Path(name).suffix.lower(),
+        "modified_at": resource.get("lastModifiedDateTime") or "",
+        "size": int(resource.get("size") or 0),
+        "status": "microsoft_search",
+        "source": "Microsoft Search",
+        "snippet": _clean_summary((hit or {}).get("summary") or ""),
+        "rank": (hit or {}).get("rank") or 0,
+    }
+
+
+def microsoft_search(token, query, *, page_size=50, max_results=200):
+    """Search Microsoft 365's existing index without crawling every file.
+
+    Uses POST /search/query first. If that endpoint is unavailable for the
+    connected account, falls back to the OneDrive driveItem search endpoint.
+    """
+    query = (query or "").strip()
+    if not query:
+        return {"results": [], "total": 0, "provider": "none"}
+
+    results = []
+    total = 0
+    try:
+        for offset in range(0, max_results, page_size):
+            body = {
+                "requests": [
+                    {
+                        "entityTypes": ["driveItem"],
+                        "query": {"queryString": query},
+                        "from": offset,
+                        "size": min(page_size, max_results - offset),
+                        "fields": [
+                            "id",
+                            "name",
+                            "webUrl",
+                            "size",
+                            "lastModifiedDateTime",
+                            "file",
+                            "folder",
+                            "parentReference",
+                        ],
+                    }
+                ]
+            }
+            payload = graph_post(f"{GRAPH}/search/query", token, body)
+            containers = []
+            for response in payload.get("value", []):
+                containers.extend(response.get("hitsContainers") or [])
+            page_hits = []
+            more = False
+            for container in containers:
+                total = max(total, int(container.get("total") or 0))
+                page_hits.extend(container.get("hits") or [])
+                more = more or bool(container.get("moreResultsAvailable"))
+            for hit in page_hits:
+                resource = hit.get("resource") or {}
+                if resource.get("folder") is not None:
+                    continue
+                results.append(_resource_to_result(resource, hit))
+            if not more or not page_hits:
+                break
+        return {"results": results[:max_results], "total": total or len(results), "provider": "Microsoft Search"}
+    except Exception as search_error:
+        # Personal Microsoft accounts can behave differently. This endpoint
+        # still searches the signed-in user's drive hierarchy and is a useful
+        # fallback for names and Microsoft-indexed content.
+        escaped = query.replace("'", "''")
+        url = (
+            f"{GRAPH}/me/drive/root/search(q='{quote(escaped)}')"
+            "?$top=200&$select=id,name,webUrl,size,lastModifiedDateTime,file,folder,parentReference"
+        )
+        try:
+            payload = graph_get(url, token)
+            for resource in payload.get("value", []):
+                if resource.get("folder") is not None:
+                    continue
+                results.append(_resource_to_result(resource))
+            return {
+                "results": results[:max_results],
+                "total": len(results),
+                "provider": "OneDrive Search",
+                "warning": f"Microsoft Search API ใช้ไม่ได้ จึงใช้ OneDrive Search แทน: {str(search_error)[:180]}",
+            }
+        except Exception as fallback_error:
+            raise RuntimeError(
+                "ค้นสดจาก Microsoft ไม่สำเร็จ: "
+                f"{str(search_error)[:180]} | fallback: {str(fallback_error)[:180]}"
+            )
 
 
 def iter_delta(token, delta_url=None):
-    select = (
-        "id,name,size,lastModifiedDateTime,webUrl,file,folder,parentReference,"
-        "deleted,remoteItem,package"
+    url = delta_url or (
+        f"{GRAPH}/me/drive/root/delta"
+        "?$select=id,name,size,lastModifiedDateTime,webUrl,file,folder,parentReference,deleted"
     )
-    url = delta_url or f"{GRAPH}/me/drive/root/delta?{urlencode({'$select': select, '$top': '200'})}"
     while url:
         payload = graph_get(url, token)
         for item in payload.get("value", []):
@@ -159,21 +283,3 @@ def iter_delta(token, delta_url=None):
             continue
         yield {"__delta_link__": payload.get("@odata.deltaLink")}
         break
-
-
-def iter_shared_with_me(token):
-    select = (
-        "id,name,size,lastModifiedDateTime,webUrl,file,folder,parentReference,"
-        "remoteItem,package"
-    )
-    url = f"{GRAPH}/me/drive/sharedWithMe?{urlencode({'$select': select, '$top': '200', 'allowexternal': 'true'})}"
-    yield from iter_collection(url, token)
-
-
-def iter_children(drive_id, item_id, token):
-    select = (
-        "id,name,size,lastModifiedDateTime,webUrl,file,folder,parentReference,"
-        "remoteItem,package"
-    )
-    url = f"{GRAPH}/drives/{drive_id}/items/{item_id}/children?{urlencode({'$select': select, '$top': '200'})}"
-    yield from iter_collection(url, token)
